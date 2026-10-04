@@ -97,7 +97,8 @@ header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:1
 <div id="toast"></div>
 <div id="mlabel"></div>
 <div id="map"></div>
-<div class="fab"><button id="measure" title="Measure distance" aria-label="Measure distance">📏</button></div>
+<div class="fab"><button id="pinbtn" title="Drop a pin: when do teams get there?" aria-label="Drop a pin">📍</button>
+  <button id="measure" title="Measure distance" aria-label="Measure distance">📏</button></div>
 <header>
   <div class="pill live"><span class="dot"></span><span id="clock">LIVE</span></div>
   <div class="pill" id="next" style="margin-left:8px;color:var(--mute)">Next –</div>
@@ -111,9 +112,10 @@ header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:1
   <div id="main" style="display:flex;flex-direction:column;min-height:0;flex:1">
     <div class="sbar"><input id="q" type="search" placeholder="Search team or nation…" autocomplete="off"></div>
     <div class="tabs">
-      <button class="tab on" data-s="rank">Standings</button>
+      <button class="tab on" data-s="rank">Rank</button>
       <button class="tab" data-s="speed">Speed</button>
-      <button class="tab" data-s="seen">Last seen</button>
+      <button class="tab" data-s="seen">Seen</button>
+      <button class="tab" data-s="near">Near me</button>
       <button class="tab fbtn" id="favOnly" title="Show only favourites">★ <span id="favN">0</span></button>
     </div>
     <div id="list"></div>
@@ -132,19 +134,58 @@ async function getJSON(path){
   for(const base of [REMOTE,'']){try{const r=await fetch(base+path+'?'+Math.floor(Date.now()/60000),{cache:'no-store'});if(r.ok)return await r.json()}catch(e){}}
   throw new Error('no data');
 }
-async function fetchTeams(){
+const PROXY=''; // live-proxy URL (Supabase edge function); empty = use data.json only
+const RAD=Math.PI/180;
+function hav(a,b){const x=Math.sin((b[0]-a[0])*RAD/2)**2+Math.cos(a[0]*RAD)*Math.cos(b[0]*RAD)*Math.sin((b[1]-a[1])*RAD/2)**2;return 12742*Math.asin(Math.sqrt(x))}
+function bearingDeg(a,b){const y=Math.sin((b[1]-a[1])*RAD)*Math.cos(b[0]*RAD),x=Math.cos(a[0]*RAD)*Math.sin(b[0]*RAD)-Math.sin(a[0]*RAD)*Math.cos(b[0]*RAD)*Math.cos((b[1]-a[1])*RAD);return(Math.atan2(y,x)/RAD+360)%360}
+const DIRS=['N','NE','E','SE','S','SW','W','NW'],compass=d=>DIRS[Math.round(d/45)%8];
+let CUMK=[];
+function projectKm(p){ /* nearest point on the course -> {km along course, off = km from course} */
+  let best={off:1e9,km:0};const kx=Math.cos(p[0]*RAD);
+  for(let i=1;i<COURSE.length;i++){const a=COURSE[i-1],b=COURSE[i],dx=(b[1]-a[1])*kx,dy=b[0]-a[0],L2=dx*dx+dy*dy;
+    const t=L2?Math.max(0,Math.min(1,(((p[1]-a[1])*kx)*dx+(p[0]-a[0])*dy)/L2)):0;
+    const q=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t],d=hav(p,q);
+    if(d<best.off)best={off:d,km:CUMK[i-1]+(CUMK[i]-CUMK[i-1])*t}}
+  return best}
+function parisMs(s){const m=/(\d+)\.(\d+)\.\s+(\d+):(\d+)/.exec(s||'');if(!m)return 0;
+  const g=Date.UTC(new Date().getFullYear(),+m[2]-1,+m[1],+m[3],+m[4]);
+  const off=Date.parse(new Date(g).toLocaleString('sv-SE',{timeZone:'Europe/Paris'}).replace(' ','T')+'Z')-g;return g-off}
+let base={},baseList=[],baseGen=0,baseAt=0,START=Date.parse('2026-10-01T04:00:00Z'),liveAt=0,lastLive={},liveHead={};
+async function loadBase(){
+  if(COURSE.length&&Date.now()-baseAt<55000)return;
   const j=await getJSON('data.json');
-  if(!COURSE.length){COURSE=j.course;CHECKPOINTS=j.checkpoints;TOTAL=j.total_km;initCourse()}
-  document.title=j.race+' – live';genAt=new Date(j.generated).getTime();
-  const gen=new Date(j.generated).getTime();
-  return j.teams.map(t=>{
-    const seen=t.seen?new Date(t.seen).getTime():gen,p=prev[t.id];let speed=p?p.speed:0;
-    if(p&&seen>p.seen){speed=Math.max(0,(t.km-p.km)/((seen-p.seen)/3600000))}
-    prev[t.id]={km:t.km,seen,speed};
-    return{id:t.id,name:t.name,no:t.no,flag:t.flag,lat:t.lat,lng:t.lng,km:t.km,rank:t.rank,speed:t.spd!=null?t.spd:speed,heading:t.heading,lastSeen:seen,
-      cpPassed:CHECKPOINTS.filter(c=>c.km<=t.km).length,
-      status:t.finish?'Finished':t.lost?'Signal lost':'On course'}});
+  if(!COURSE.length){COURSE=j.course;CHECKPOINTS=j.checkpoints;TOTAL=j.total_km;CUMK=[0];for(let i=1;i<COURSE.length;i++)CUMK.push(CUMK[i-1]+hav(COURSE[i-1],COURSE[i]));initCourse()}
+  if(j.start)START=Date.parse(j.start);
+  document.title=j.race+' – live';genAt=baseGen=new Date(j.generated).getTime();baseAt=Date.now();
+  base={};j.teams.forEach(t=>base[t.id]=t);baseList=j.teams;
 }
+async function fetchLive(){const r=await fetch(PROXY,{cache:'no-store'});if(!r.ok)throw new Error('proxy '+r.status);return (await r.json()).positions}
+function build(n){
+  const p=prev[n.id];let speed=n.spd!=null?n.spd:(p?p.speed:0);
+  if(n.spd==null&&p&&n.seen>p.seen)speed=Math.max(0,(n.km-p.km)/((n.seen-p.seen)/3600000));
+  prev[n.id]={km:n.km,seen:n.seen,speed};
+  return{id:n.id,name:n.name,no:n.no,flag:n.flag,lat:n.lat,lng:n.lng,km:n.km,rank:n.rank,speed,heading:n.heading,lastSeen:n.seen,
+    cpPassed:CHECKPOINTS.filter(c=>c.km<=n.km).length,status:n.finish?'Finished':n.lost?'Signal lost':'On course'}}
+async function fetchTeams(){
+  try{await loadBase()}catch(e){if(!COURSE.length)throw e}
+  let live=null;if(PROXY){try{live=await fetchLive();liveAt=Date.now()}catch(e){}}
+  if(live)return live.filter(p=>p.display!=='0'&&p.lat!=null).map(p=>{
+    const id=+p.id,b=base[id]||{},pos=[+p.lat,+p.lng],lp=lastLive[id];let heading=liveHead[id]!=null?liveHead[id]:b.heading;
+    if(lp&&hav(lp,pos)>=.08){heading=Math.round(bearingDeg(lp,pos));liveHead[id]=heading}
+    if(!lp||hav(lp,pos)>=.08)lastLive[id]=pos;
+    return build({id,name:p.name,no:p.race_number,flag:b.flag||'',lat:pos[0],lng:pos[1],km:projectKm(pos).km,rank:+p.rank||null,spd:b.spd,heading,seen:parisMs(p.utc)||Date.now(),lost:p.lost_signal,finish:p.finish_time})});
+  return baseList.map(t=>build({...t,seen:t.seen?Date.parse(t.seen):baseGen}));
+}
+
+/* ===== ETA helpers ===== */
+function speeds(t){const hrs=Math.max(1,(Date.now()-START)/3600000),avg=t.km/hrs,main=Math.max(.5,t.speed>=1.5?t.speed:avg);
+  return{main,lo:Math.max(.5,Math.min(main,avg||main)),hi:Math.max(main,avg,.5)}}
+function etaTo(t,km){const rem=km-t.km;if(t.status==='Finished'||rem<=0.3)return{passed:true,rem};
+  const s=speeds(t),now=Date.now(),t0=Math.min(now,t.lastSeen||now); /* count from when the position was measured, never in the past */
+  const at=h=>Math.max(now,t0+h*3600000);return{rem,eta:at(rem/s.main),fast:at(rem/s.hi),slow:at(rem/s.lo)}}
+const clock=ms=>new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'Europe/Paris'});
+const inDur=ms=>{const m=Math.max(0,Math.round((ms-Date.now())/60000));return m<60?m+' min':Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m'};
+const etaTxt=e=>e.passed?'passed':`≈ ${clock(e.eta)}${Math.abs(e.slow-e.fast)>20*60000?` (${clock(e.fast)}–${clock(e.slow)})`:''}`;
 
 /* ===== KARTA ===== */
 const map=L.map('map',{zoomControl:false,attributionControl:false}).setView([42.45,8.95],9);
@@ -160,6 +201,7 @@ function initCourse(){
 document.getElementById('fit').onclick=()=>{closeDetail();if(route)map.fitBounds(route.getBounds(),FIT)};
 
 /* ===== UI ===== */
+let lastFix=null;
 const sheet=document.getElementById('sheet'),listEl=document.getElementById('list'),q=document.getElementById('q');
 const SPEED_STOPS=[[0,[255,90,77]],[3,[255,178,56]],[8,[90,196,246]]];
 function speedColor(v){v=Math.max(0,Math.min(v||0,8));for(let i=0;i<2;i++){const[a,ca]=SPEED_STOPS[i],[b,cb]=SPEED_STOPS[i+1];if(v<=b){const k=(v-a)/(b-a);return`rgb(${ca.map((c,j)=>Math.round(c+(cb[j]-c)*k)).join(',')})`}}return'rgb(90,196,246)'}
@@ -173,14 +215,15 @@ function toggleFav(id){favs.has(id)?favs.delete(id):favs.add(id);if(!favs.size)f
 const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s ago':Math.round(s/60)+' min ago'};
 function ranked(){return [...teams].sort((a,b)=>(a.rank||999)-(b.rank||999)||b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
 function render(){
-  let r=ranked().filter(shown);const s=q.value.trim().toLowerCase();
+  let r=ranked().filter(shown).map(t=>({...t,dist:lastFix?hav(lastFix,[t.lat,t.lng]):null}));const s=q.value.trim().toLowerCase();
   if(s)r=r.filter(t=>t.name.toLowerCase().includes(s));
   if(sortBy==='speed')r.sort((a,b)=>b.speed-a.speed);
   if(sortBy==='seen')r.sort((a,b)=>b.lastSeen-a.lastSeen);
+  if(sortBy==='near'&&lastFix)r.sort((a,b)=>a.dist-b.dist);
   listEl.innerHTML=r.map(t=>`<div class="row" data-id="${t.id}">
     <div class="rank">${t.rank}</div>
     <div class="info"><div class="name"><span class="flag">${t.flag}</span> ${t.name}</div>
-      <div class="sub">CP ${t.cpPassed}/${CHECKPOINTS.length} · ${t.speed.toFixed(1)} km/h</div>
+      <div class="sub">CP ${t.cpPassed}/${CHECKPOINTS.length} · ${t.speed.toFixed(1)} km/h${t.dist!=null?` · ◎ ${t.dist.toFixed(1)} km`:''}</div>
       <div class="bar"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div></div>
     <div class="right"><div class="km">${(TOTAL-t.km).toFixed(0)} km</div><div class="sub">to go</div></div>
     <button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></div>`).join('')||`<p class="sub" style="padding:16px">${favOnly?'No favourites match.':'No teams found.'}</p>`;
@@ -190,7 +233,7 @@ function upsertMarkers(){
     if(!shown(t)&&t.id!==selected){if(markers[t.id]){map.removeLayer(markers[t.id]);delete markers[t.id]}return}
     const html=`<div class="mw"><div class="ar" style="display:${t.heading==null?'none':'block'};transform:rotate(${t.heading||0}deg)"><i></i></div><div class="mk${selected===t.id?' sel':''}">${t.rank}</div><span class="sd" style="background:${speedColor(t.speed)}"></span></div>`;
     const ic=L.divIcon({className:'',html,iconSize:[40,40]});
-    if(!markers[t.id]){markers[t.id]=L.marker([t.lat,t.lng],{icon:ic}).addTo(map).on('click',()=>{if(!measuring)select(t.id)})}
+    if(!markers[t.id]){markers[t.id]=L.marker([t.lat,t.lng],{icon:ic}).addTo(map).on('click',()=>{if(!measuring&&!pinning)select(t.id)})}
     else{markers[t.id].setLatLng([t.lat,t.lng]);markers[t.id].setIcon(ic)}
     markers[t.id].setOpacity(selected&&selected!==t.id?.3:1);
   });
@@ -213,19 +256,23 @@ async function drawTracks(){
 const fmtDur=s=>{const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${String(m).padStart(2,'0')}m`:`${m}m ${String(s%60).padStart(2,'0')}s`};
 const esc=x=>String(x??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function select(id,refresh){
-  const changed=selected!==id;selected=id;const t=ranked().find(x=>x.id===id);if(!t)return;
+  pinView=false;const changed=selected!==id;selected=id;const t=ranked().find(x=>x.id===id);if(!t)return;
   if(changed)cpOpen=false;
   if(!refresh){map.flyTo([t.lat,t.lng],12,{duration:.6});setSheet(false)}
   document.getElementById('main').style.display='none';
   const d=document.getElementById('detail');d.style.display='block';
   const x=detailCache[id],r=x&&x.racer,times=x?x.times:[];
   const done=times.filter(c=>c.time&&c.time!=='-').length;
+  const nextCp=CHECKPOINTS.find(c=>c.km>t.km+.3),nextEta=nextCp&&etaTo(t,nextCp.km);
   const cpTxt=x?`${done}/${times.length}`:`${t.cpPassed}/${CHECKPOINTS.length}`;
   const st=(k,v)=>v?`<div class="card"><small>${k}</small><strong style="font-size:17px">${esc(v)}</strong></div>`:'';
   d.innerHTML=`<button class="back" id="bk">← All teams</button>
    <h2 style="margin:4px 0;display:flex;align-items:center;gap:6px"><span style="flex:1">${t.flag} ${esc(t.name)} <small style="color:var(--mute)">#${esc(t.no)}</small></span><button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></h2>
-   <div class="sub">${t.status} · last seen ${fmtAgo(t.lastSeen)}${r&&r.battery_level?' · 🔋 '+esc(r.battery_level):''}</div>
+   <div class="sub">${t.status} · last seen <span style="${Date.now()-t.lastSeen>10*60000?'color:#ff8a65;font-weight:700':''}">${fmtAgo(t.lastSeen)}</span>${r&&r.battery_level?' · 🔋 '+esc(r.battery_level):''}</div>
    <div class="grid cards">
+    ${nextCp?`<div class="card" style="grid-column:1/-1"><small>Next checkpoint</small><strong style="font-size:17px">${esc(nextCp.name)}</strong><div class="sub">${nextCp.km-t.km<.5?'arriving now':`${(nextCp.km-t.km).toFixed(0)} km · ${etaTxt(nextEta)} · in ${inDur(nextEta.eta)}`}</div></div>`:''}
+    ${lastFix?`<div class="card"><small>From me</small><strong>${hav(lastFix,[t.lat,t.lng]).toFixed(1)} km <span style="display:inline-block;transform:rotate(${Math.round(bearingDeg(lastFix,[t.lat,t.lng]))}deg)">↑</span> ${compass(bearingDeg(lastFix,[t.lat,t.lng]))}</strong></div>`:`<div class="card" id="needMe"><small>From me</small><strong style="font-size:15px">Tap ◎ to enable</strong></div>`}
+    <a class="card" href="https://www.google.com/maps/dir/?api=1&destination=${t.lat},${t.lng}&travelmode=driving" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Navigate by car ↗</small><strong style="font-size:17px">Directions</strong></a>
     <div class="card"><small>Rank</small><strong>#${t.rank}</strong></div>
     <div class="card"><small>Speed</small><strong>${r&&r.speed?esc(r.speed):t.speed.toFixed(1)+' km/h'}</strong></div>
     <div class="card"><small>Covered</small><strong>${t.km.toFixed(0)} km</strong></div>
@@ -241,9 +288,9 @@ function select(id,refresh){
   document.getElementById('cpCard').onclick=()=>{cpOpen=!cpOpen;select(id,true);if(cpOpen)setTimeout(()=>{const u=d.querySelector('.times');u&&u.scrollIntoView({behavior:'smooth',block:'nearest'})},50)};
   upsertMarkers();
   if(!x||Date.now()-x.at>=120000)loadDetail(id).then(()=>{if(selected===id)select(id,true)});
-  drawTracks();
+  drawTracks();updateMeLine();
 }
-function closeDetail(){selected=null;drawTracks();document.getElementById('detail').style.display='none';document.getElementById('main').style.display='flex';upsertMarkers()}
+function closeDetail(){selected=null;pinView=false;drawTracks();updateMeLine();document.getElementById('detail').style.display='none';document.getElementById('main').style.display='flex';upsertMarkers()}
 listEl.onclick=e=>{const f=e.target.closest('[data-fav]');if(f){toggleFav(+f.dataset.fav);return}const r=e.target.closest('.row');if(r)select(+r.dataset.id)};
 document.getElementById('favOnly').onclick=()=>{
   if(!favs.size&&!favOnly){alert('Tap ☆ on a team to add it to your favourites first.');return}
@@ -252,7 +299,7 @@ document.getElementById('favOnly').onclick=()=>{
 };
 syncFav();
 q.oninput=render;
-document.querySelectorAll('.tab[data-s]').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab[data-s]').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortBy=b.dataset.s;render()});
+document.querySelectorAll('.tab[data-s]').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab[data-s]').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortBy=b.dataset.s;if(sortBy==='near'&&!lastFix)startMe();render()});
 
 /* ===== Dragbart bottenpanel ===== */
 const PEEK=150;let startY=0,startOff=0,dragging=false;
@@ -266,11 +313,17 @@ grab.onclick=()=>setSheet(!sheet.classList.contains('open'));
 q.addEventListener('focus',()=>setSheet(true));
 
 /* ===== My position + heading ===== */
-let meMarker=null,meHeading=null,meOn=false,lastFix=null;
+let meMarker=null,meHeading=null,meOn=false,meLine=null,fixT=0;
 function meIcon(){return L.divIcon({className:'',html:`<div class="me${meHeading!=null?' dir':''}"><b style="transform:rotate(${meHeading||0}deg)"></b><i></i></div>`,iconSize:[22,22]})}
 function setHeading(h){if(h==null||isNaN(h))return;meHeading=(h+360)%360;if(meMarker)meMarker.setIcon(meIcon())}
+function updateMeLine(){
+  const t=selected&&teams.find(x=>x.id===selected);
+  if(!lastFix||!t){if(meLine){map.removeLayer(meLine);meLine=null}return}
+  const pts=[lastFix,[t.lat,t.lng]];if(meLine)meLine.setLatLngs(pts);else meLine=L.polyline(pts,{color:'#2f7bff',weight:3,dashArray:'4 8',interactive:false}).addTo(map)}
 function onFix(p){
   const ll=[p.coords.latitude,p.coords.longitude];lastFix=ll;
+  updateMeLine();
+  if(Date.now()-fixT>10000){fixT=Date.now();if(selected)select(selected,true);else if(pinView)showPin();else if(sortBy==='near'&&document.getElementById('main').style.display!=='none')render()}
   if(!meMarker){meMarker=L.marker(ll,{icon:meIcon(),zIndexOffset:1000,interactive:false}).addTo(map);if(meOn)map.flyTo(ll,Math.max(map.getZoom(),12),{duration:.6});meOn=false}
   else meMarker.setLatLng(ll);
   if(p.coords.heading!=null&&!isNaN(p.coords.heading)&&(p.coords.speed||0)>0.5)setHeading(p.coords.heading);
@@ -300,9 +353,45 @@ function mRender(){
   mLabel.textContent=mPts.length<2?'Tap the map to add points':`${mDist().toFixed(2)} km · tap here to undo`;
 }
 function mStop(){measuring=false;mPts=[];if(mLine)map.removeLayer(mLine);mLine=null;mDots.forEach(m=>map.removeLayer(m));mDots=[];mLabel.style.display='none';mBtn.classList.remove('on')}
-mBtn.onclick=()=>{if(measuring){mStop();return}measuring=true;mBtn.classList.add('on');mLabel.style.display='block';mRender()};
+mBtn.onclick=()=>{if(pinning){pinning=false}if(measuring){mStop();return}measuring=true;mBtn.classList.add('on');mLabel.style.display='block';mRender()};
 mLabel.onclick=()=>{mPts.pop();mRender()};
 map.on('click',e=>{if(!measuring)return;mPts.push([e.latlng.lat,e.latlng.lng]);mRender()});
+
+/* ===== Pin: when do the teams get here? ===== */
+let pin=null,pinning=false,pinView=false;
+const pinBtn=document.getElementById('pinbtn');
+function pinIcon(){return L.divIcon({className:'',html:'<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6))">📍</div>',iconSize:[30,30],iconAnchor:[15,30]})}
+function clearPin(){if(pin&&pin.marker)map.removeLayer(pin.marker);pin=null;pinBtn.classList.remove('on');closeDetail()}
+function setPin(ll){
+  const pr=projectKm([ll.lat,ll.lng]);
+  if(pin&&pin.marker)map.removeLayer(pin.marker);
+  pin={lat:ll.lat,lng:ll.lng,km:pr.km,off:pr.off,marker:L.marker(ll,{icon:pinIcon(),interactive:false}).addTo(map)};
+  pinning=false;mLabel.style.display='none';pinBtn.classList.add('on');setSheet(true);showPin()}
+function showPin(){
+  if(!pin)return;pinView=true;selected=null;
+  const rows=teams.map(t=>({t,e:etaTo(t,pin.km)})).sort((a,b)=>(a.e.passed?1:0)-(b.e.passed?1:0)||(a.e.eta||0)-(b.e.eta||0)||b.t.km-a.t.km);
+  document.getElementById('main').style.display='none';
+  const d=document.getElementById('detail');d.style.display='block';
+  const mine=lastFix?`${hav(lastFix,[pin.lat,pin.lng]).toFixed(1)} km from you · `:'';
+  d.innerHTML=`<button class="back" id="bk">← All teams</button>
+   <h2 style="margin:4px 0">📍 Your pin</h2>
+   <div class="sub">${mine}course km ${pin.km.toFixed(0)} of ${TOTAL.toFixed(0)}${pin.off>3?` · <span style="color:#ff8a65">${pin.off.toFixed(1)} km from the course line</span>`:''}</div>
+   <div class="grid cards">
+    <a class="card" href="https://www.google.com/maps/dir/?api=1&destination=${pin.lat},${pin.lng}&travelmode=driving" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Navigate by car ↗</small><strong style="font-size:17px">To the pin</strong></a>
+    <div class="card" id="rmpin"><small>Pin</small><strong style="font-size:17px">Remove</strong></div>
+   </div>
+   <p class="sub">Estimated arrival at the pin from each team's recent and average speed. Positions can be a few minutes old and the course line is approximate, so treat times as a guide.</p>
+   <ul class="times">${rows.map(({t,e})=>`<li data-team="${t.id}" style="cursor:pointer"><span>#${t.rank} ${t.flag} ${esc(t.name)}</span><span class="t">${etaTxt(e)}<em>${e.passed?'already past':`in ${inDur(e.eta)} · ${e.rem.toFixed(0)} km away`}</em></span></li>`).join('')}</ul>`;
+  document.getElementById('bk').onclick=closeDetail;
+  document.getElementById('rmpin').onclick=clearPin;
+  d.onclick=ev=>{const li=ev.target.closest('li[data-team]');if(li)select(+li.dataset.team)};
+}
+pinBtn.onclick=()=>{
+  if(measuring)mStop();
+  if(pinning){pinning=false;mLabel.style.display='none';return}
+  if(pin){setSheet(true);showPin();return}
+  pinning=true;mLabel.style.display='block';mLabel.textContent='Tap the course where you will be'};
+map.on('click',e=>{if(pinning)setPin(e.latlng)});
 
 /* ===== Toast + loader ===== */
 const toastEl=document.getElementById('toast');let toastT;
@@ -312,6 +401,7 @@ function hideLoader(){document.getElementById('loading').classList.add('hide')}
 /* ===== Countdown to next data update ===== */
 const nextEl=document.getElementById('next');
 setInterval(()=>{
+  if(liveAt&&Date.now()-liveAt<90000){nextEl.textContent='Live · '+Math.round((Date.now()-liveAt)/1000)+'s ago';return}
   if(!genAt){return}
   const left=genAt+CYCLE-Date.now();
   if(left>0){const s=Math.ceil(left/1000);nextEl.textContent='Next ≈ '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
@@ -322,10 +412,10 @@ setInterval(()=>{
 async function tick(){
   try{teams=await fetchTeams();upsertMarkers();if(!dragging&&!q.matches(':focus')&&document.getElementById('main').style.display!=='none')render();
     document.getElementById('clock').textContent='LIVE '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-    if(selected)select(selected,true);hideLoader()}
+    if(selected)select(selected,true);else if(pinView)showPin();updateMeLine();hideLoader()}
   catch(e){document.getElementById('clock').textContent='Offline';toast('Could not refresh data – retrying');document.getElementById('lstat').textContent='Still trying to reach the race data…'}
 }
-tick();setInterval(tick,60000);
+tick();setInterval(tick,30000);
 </script>
 </body>
 </html>

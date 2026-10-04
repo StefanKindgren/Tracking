@@ -165,7 +165,8 @@ def main(out):
     teams.sort(key=lambda t: -t["km"])
     doc = {"race": td["raceData"]["name"], "generated": datetime.now(paris).isoformat(timespec="seconds"),
         "server_time_utc": live["server_time_utc"], "total_km": round(cum[-1], 2),
-        "course": [[round(a, 5), round(b, 5)] for a, b in course], "checkpoints": cps}
+        "course": [[round(a, 5), round(b, 5)] for a, b in course], "checkpoints": cps,
+        "start": datetime.fromisoformat(td["raceData"]["real_race_start"]).replace(tzinfo=paris).isoformat()}
     json.dump(doc | {"teams": teams}, open(out, "w"), separators=(",", ":"), ensure_ascii=False)
     outdir = os.path.dirname(os.path.abspath(out))
     os.makedirs(os.path.join(outdir, "teams"), exist_ok=True)
