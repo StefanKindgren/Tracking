@@ -416,7 +416,7 @@ async function tick(){
     if(selected)select(selected,true);else if(pinView)showPin();updateMeLine();hideLoader()}
   catch(e){document.getElementById('clock').textContent='Offline';toast('Could not refresh data – retrying');document.getElementById('lstat').textContent='Still trying to reach the race data…'}
 }
-tick();setInterval(tick,30000);
+tick();setInterval(tick,60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script>
 </body>
