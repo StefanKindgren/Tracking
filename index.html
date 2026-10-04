@@ -25,7 +25,7 @@ header{position:fixed;top:0;left:0;right:0;z-index:1000;padding:calc(env(safe-ar
 .sbar{padding:4px 12px 10px}
 input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:11px 12px;font-size:16px;outline:none}
 .tabs{display:flex;gap:6px;padding:0 12px 8px}
-.tab{flex:1;text-align:center;padding:7px;border-radius:10px;background:var(--panel2);color:var(--mute);font-weight:600;border:0;font-size:14px}
+.tab{flex:1;min-width:0;text-align:center;padding:7px;border-radius:10px;background:var(--panel2);color:var(--mute);font-weight:600;border:0;font-size:14px}
 .tab.on{background:var(--accent);color:#1a1200}
 #list{overflow-y:auto;flex:1;padding:0 8px calc(env(safe-area-inset-bottom) + 16px);touch-action:pan-y;-webkit-overflow-scrolling:touch}
 .row{display:flex;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid var(--line)}
@@ -39,6 +39,9 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 .right{text-align:right;font-variant-numeric:tabular-nums}
 .right .km{font-weight:700}
 .flag{font-size:20px}
+.star{background:none;border:0;color:var(--mute);font-size:24px;line-height:1;padding:6px 4px;cursor:pointer}
+.star.on{color:var(--accent)}
+.fbtn{flex:0 0 auto;padding:7px 12px}
 #detail{display:none;padding:4px 14px 16px;overflow-y:auto}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
 .card{background:var(--panel2);border-radius:12px;padding:10px 12px}
@@ -57,7 +60,7 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <header>
   <div class="pill live"><span class="dot"></span><span id="clock">LIVE</span></div>
   <div class="grow"></div>
-  <button class="pill" id="fit" style="color:var(--text)">Hela banan</button>
+  <button class="pill" id="fit" style="color:var(--text)">Full course</button>
 </header>
 
 <section id="sheet">
@@ -68,6 +71,7 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
       <button class="tab on" data-s="rank">Standings</button>
       <button class="tab" data-s="speed">Speed</button>
       <button class="tab" data-s="seen">Last seen</button>
+      <button class="tab fbtn" id="favOnly" title="Show only favourites">★ <span id="favN">0</span></button>
     </div>
     <div id="list"></div>
   </div>
@@ -107,11 +111,17 @@ document.getElementById('fit').onclick=()=>{closeDetail();if(route)map.fitBounds
 
 /* ===== UI ===== */
 const sheet=document.getElementById('sheet'),listEl=document.getElementById('list'),q=document.getElementById('q');
-let teams=[],markers={},selected=null,sortBy='rank';
+let teams=[],markers={},selected=null,sortBy='rank',favOnly=false;
+let favs=new Set();
+try{favs=new Set(JSON.parse(localStorage.getItem('favs')||'[]'));favOnly=localStorage.getItem('favOnly')==='1'}catch(e){}
+const saveFavs=()=>{try{localStorage.setItem('favs',JSON.stringify([...favs]));localStorage.setItem('favOnly',favOnly?'1':'0')}catch(e){}};
+const shown=t=>!favOnly||favs.has(t.id);
+function syncFav(){const b=document.getElementById('favOnly');b.classList.toggle('on',favOnly);document.getElementById('favN').textContent=favs.size}
+function toggleFav(id){favs.has(id)?favs.delete(id):favs.add(id);if(!favs.size)favOnly=false;saveFavs();syncFav();upsertMarkers();render();if(selected)select(selected,true)}
 const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s ago':Math.round(s/60)+' min ago'};
 function ranked(){return [...teams].sort((a,b)=>(a.rank||999)-(b.rank||999)||b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
 function render(){
-  let r=ranked();const s=q.value.trim().toLowerCase();
+  let r=ranked().filter(shown);const s=q.value.trim().toLowerCase();
   if(s)r=r.filter(t=>t.name.toLowerCase().includes(s));
   if(sortBy==='speed')r.sort((a,b)=>b.speed-a.speed);
   if(sortBy==='seen')r.sort((a,b)=>b.lastSeen-a.lastSeen);
@@ -120,10 +130,12 @@ function render(){
     <div class="info"><div class="name"><span class="flag">${t.flag}</span> ${t.name}</div>
       <div class="sub">CP ${t.cpPassed}/${CHECKPOINTS.length} · ${t.speed.toFixed(1)} km/h</div>
       <div class="bar"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div></div>
-    <div class="right"><div class="km">${(TOTAL-t.km).toFixed(0)} km</div><div class="sub">to go</div></div></div>`).join('')||'<p class="sub" style="padding:16px">No teams found.</p>';
+    <div class="right"><div class="km">${(TOTAL-t.km).toFixed(0)} km</div><div class="sub">to go</div></div>
+    <button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></div>`).join('')||`<p class="sub" style="padding:16px">${favOnly?'No favourites match.':'No teams found.'}</p>`;
 }
 function upsertMarkers(){
   ranked().forEach(t=>{
+    if(!shown(t)&&t.id!==selected){if(markers[t.id]){map.removeLayer(markers[t.id]);delete markers[t.id]}return}
     const html=`<div class="mk${selected===t.id?' sel':''}">${t.rank}</div>`;
     if(!markers[t.id]){markers[t.id]=L.marker([t.lat,t.lng],{icon:L.divIcon({className:'',html,iconSize:[28,28]})}).addTo(map).on('click',()=>select(t.id))}
     else{markers[t.id].setLatLng([t.lat,t.lng]);markers[t.id].setIcon(L.divIcon({className:'',html,iconSize:[28,28]}))}
@@ -135,7 +147,7 @@ function select(id,refresh){
   document.getElementById('main').style.display='none';
   const d=document.getElementById('detail');d.style.display='block';
   d.innerHTML=`<button class="back" id="bk">← All teams</button>
-   <h2 style="margin:4px 0">${t.flag} ${t.name}</h2><div class="sub">${t.status} · ${fmtAgo(t.lastSeen)}</div>
+   <h2 style="margin:4px 0;display:flex;align-items:center;gap:6px"><span style="flex:1">${t.flag} ${t.name}</span><button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></h2><div class="sub">${t.status} · ${fmtAgo(t.lastSeen)}</div>
    <div class="grid">
     <div class="card"><small>Rank</small><strong>#${t.rank}</strong></div>
     <div class="card"><small>Speed</small><strong>${t.speed.toFixed(1)} km/h</strong></div>
@@ -144,13 +156,19 @@ function select(id,refresh){
     <div class="card"><small>Checkpoints</small><strong>${t.cpPassed}/${CHECKPOINTS.length}</strong></div>
     <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · open in Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
    </div><div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
-  document.getElementById('bk').onclick=closeDetail;
+  document.getElementById('bk').onclick=closeDetail;d.querySelector('[data-fav]').onclick=()=>toggleFav(t.id);
   upsertMarkers();
 }
 function closeDetail(){selected=null;document.getElementById('detail').style.display='none';document.getElementById('main').style.display='flex';upsertMarkers()}
-listEl.onclick=e=>{const r=e.target.closest('.row');if(r)select(+r.dataset.id)};
+listEl.onclick=e=>{const f=e.target.closest('[data-fav]');if(f){toggleFav(+f.dataset.fav);return}const r=e.target.closest('.row');if(r)select(+r.dataset.id)};
+document.getElementById('favOnly').onclick=()=>{
+  if(!favs.size&&!favOnly){alert('Tap ☆ on a team to add it to your favourites first.');return}
+  favOnly=!favOnly;saveFavs();syncFav();upsertMarkers();render();
+  if(favOnly&&route){const pts=teams.filter(t=>favs.has(t.id)).map(t=>[t.lat,t.lng]);if(pts.length)map.fitBounds(pts,{...FIT,maxZoom:12})}
+};
+syncFav();
 q.oninput=render;
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortBy=b.dataset.s;render()});
+document.querySelectorAll('.tab[data-s]').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab[data-s]').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortBy=b.dataset.s;render()});
 
 /* ===== Dragbart bottenpanel ===== */
 const PEEK=150;let startY=0,startOff=0,dragging=false;
