@@ -58,6 +58,11 @@ header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:1
 .me b{position:absolute;left:50%;top:-14px;margin-left:-7px;border:7px solid transparent;border-bottom:12px solid #2f7bff;display:none;transform-origin:7px 25px}
 .me.dir b{display:block}
 .cards .card{cursor:pointer}
+.cards .card.tap{border:1px solid var(--accent);display:flex;flex-direction:column;position:relative;padding-right:34px}
+.cards .card.tap::after{content:'›';position:absolute;right:12px;top:50%;margin-top:-18px;font-size:30px;color:var(--accent);transition:transform .2s}
+.cards .card.tap.open::after{transform:rotate(90deg)}
+.cards .card.tap .hint{color:var(--accent);font-size:12px;font-weight:600;margin-top:2px}
+.cards .card.tap:active{background:var(--line)}
 .times{margin:0 0 12px;padding:0;list-style:none;font-variant-numeric:tabular-nums}
 .times li{display:flex;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:14px}
 .times li.done span:last-child{color:var(--text);font-weight:600}
@@ -194,7 +199,7 @@ function select(id,refresh){
     <div class="card"><small>Speed</small><strong>${r&&r.speed?esc(r.speed):t.speed.toFixed(1)+' km/h'}</strong></div>
     <div class="card"><small>Covered</small><strong>${t.km.toFixed(0)} km</strong></div>
     <div class="card"><small>Remaining</small><strong>${(TOTAL-t.km).toFixed(0)} km</strong></div>
-    <div class="card" id="cpCard"><small>Checkpoints ${cpOpen?'▴':'▾'}</small><strong>${cpTxt}</strong></div>
+    <div class="card tap${cpOpen?' open':''}" id="cpCard" role="button" tabindex="0" aria-expanded="${cpOpen}"><small>Checkpoints</small><strong>${cpTxt}</strong><span class="hint">${cpOpen?'Tap to hide times':'Tap to see times'}</span></div>
     <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · open in Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
     ${r?st('Pace',r.pace)+st('VAM',r.vam)+st('Altitude',r.altitude)+st('Moving time',r.moving_time)+st('Standing time',r.standing_time)+st('Category',r.category_name):''}
    </div>
@@ -202,7 +207,7 @@ function select(id,refresh){
    <div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
   document.getElementById('bk').onclick=closeDetail;
   d.querySelector('[data-fav]').onclick=()=>toggleFav(t.id);
-  document.getElementById('cpCard').onclick=()=>{cpOpen=!cpOpen;select(id,true)};
+  document.getElementById('cpCard').onclick=()=>{cpOpen=!cpOpen;select(id,true);if(cpOpen)setTimeout(()=>{const u=d.querySelector('.times');u&&u.scrollIntoView({behavior:'smooth',block:'nearest'})},50)};
   upsertMarkers();
   if(!x||Date.now()-x.at>=120000)loadDetail(id).then(()=>{if(selected===id)select(id,true)});
   drawTracks();
