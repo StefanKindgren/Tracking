@@ -134,7 +134,7 @@ async function getJSON(path){
   for(const base of [REMOTE,'']){try{const r=await fetch(base+path+'?'+Math.floor(Date.now()/60000),{cache:'no-store'});if(r.ok)return await r.json()}catch(e){}}
   throw new Error('no data');
 }
-const PROXY=''; // live-proxy URL (Supabase edge function); empty = use data.json only
+const PROXY='https://iootdcaldvqgvspfqzpe.supabase.co/functions/v1/arwc-live'; // live positions (Supabase edge function); falls back to data.json
 const RAD=Math.PI/180;
 function hav(a,b){const x=Math.sin((b[0]-a[0])*RAD/2)**2+Math.cos(a[0]*RAD)*Math.cos(b[0]*RAD)*Math.sin((b[1]-a[1])*RAD/2)**2;return 12742*Math.asin(Math.sqrt(x))}
 function bearingDeg(a,b){const y=Math.sin((b[1]-a[1])*RAD)*Math.cos(b[0]*RAD),x=Math.cos(a[0]*RAD)*Math.sin(b[0]*RAD)-Math.sin(a[0]*RAD)*Math.cos(b[0]*RAD)*Math.cos((b[1]-a[1])*RAD);return(Math.atan2(y,x)/RAD+360)%360}
