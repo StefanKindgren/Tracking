@@ -52,6 +52,7 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 .mk.sel{background:#ff4d6d;color:#fff;transform:scale(1.25)}
 .cp{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid #1b6ca8}
 .leaflet-control-zoom{display:none}
+header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:10px}
 .me{width:22px;height:22px;position:relative}
 .me i{position:absolute;inset:3px;border-radius:50%;background:#2f7bff;border:3px solid #fff;box-shadow:0 0 0 6px rgba(47,123,255,.25),0 2px 6px rgba(0,0,0,.5)}
 .me b{position:absolute;left:50%;top:-14px;margin-left:-7px;border:7px solid transparent;border-bottom:12px solid #2f7bff;display:none;transform-origin:7px 25px}
@@ -69,9 +70,10 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <div id="map"></div>
 <header>
   <div class="pill live"><span class="dot"></span><span id="clock">LIVE</span></div>
+  <div class="pill" id="next" style="margin-left:8px;color:var(--mute)">Next –</div>
   <div class="grow"></div>
-  <button class="pill" id="loc" style="color:var(--text);margin-right:8px">◎ Me</button>
-  <button class="pill" id="fit" style="color:var(--text)">Full course</button>
+  <button class="pill" id="loc" style="color:var(--text);margin-right:8px">◎</button>
+  <button class="pill" id="fit" style="color:var(--text)">Course</button>
 </header>
 
 <section id="sheet">
@@ -93,7 +95,8 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <script>
 /* ===== DATA-LAGER =====
    data.json is created by tools/fetch_data.py (ARWC2026 from follow.me.cz) and refreshed by GitHub Actions. */
-let COURSE=[],CHECKPOINTS=[],TOTAL=0,prev={};
+let COURSE=[],CHECKPOINTS=[],TOTAL=0,prev={},genAt=0;
+const CYCLE=6.5*60000; // cron 5 min + ~1.5 min run time
 const REMOTE='https://raw.githubusercontent.com/StefanKindgren/Tracking/data/';
 async function getJSON(path){
   for(const base of [REMOTE,'']){try{const r=await fetch(base+path+'?'+Math.floor(Date.now()/60000),{cache:'no-store'});if(r.ok)return await r.json()}catch(e){}}
@@ -102,7 +105,7 @@ async function getJSON(path){
 async function fetchTeams(){
   const j=await getJSON('data.json');
   if(!COURSE.length){COURSE=j.course;CHECKPOINTS=j.checkpoints;TOTAL=j.total_km;initCourse()}
-  document.title=j.race+' – live';
+  document.title=j.race+' – live';genAt=new Date(j.generated).getTime();
   const gen=new Date(j.generated).getTime();
   return j.teams.map(t=>{
     const seen=t.seen?new Date(t.seen).getTime():gen,p=prev[t.id];let speed=p?p.speed:0;
@@ -249,6 +252,15 @@ async function startMe(){
   navigator.geolocation.watchPosition(onFix,err=>{alert('Could not get your position: '+err.message)},{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
 }
 document.getElementById('loc').onclick=startMe;
+
+/* ===== Countdown to next data update ===== */
+const nextEl=document.getElementById('next');
+setInterval(()=>{
+  if(!genAt){return}
+  const left=genAt+CYCLE-Date.now();
+  if(left>0){const s=Math.ceil(left/1000);nextEl.textContent='Next ≈ '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+  else{nextEl.textContent='Updating…';if(!window._poll||Date.now()-window._poll>15000){window._poll=Date.now();tick()}}
+},1000);
 
 /* ===== Loop ===== */
 async function tick(){

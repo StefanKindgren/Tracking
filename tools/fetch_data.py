@@ -88,6 +88,7 @@ def team_detail(args):
     return True
 
 def main(out):
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     html = get(PAGE)
     m = re.search(r"var track_data = (\{.*?\n\t\t\});", html, re.S)
     td = json.loads(m.group(1))
