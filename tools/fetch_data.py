@@ -71,6 +71,44 @@ def decode_track(ta, tz):
     if pts[-1] != [lat / 1e6, lng / 1e6]: pts.append([lat / 1e6, lng / 1e6])
     return [[round(a, 5), round(b, 5)] for a, b in pts]
 
+def bearing(a, b):
+    r = math.pi / 180
+    y = math.sin((b[1]-a[1])*r) * math.cos(b[0]*r)
+    x = math.cos(a[0]*r)*math.sin(b[0]*r) - math.sin(a[0]*r)*math.cos(b[0]*r)*math.cos((b[1]-a[1])*r)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+def motion(ta):
+    """Riktning (grader) och fart (km/h, senaste ~10 min) ur råa spårpunkter."""
+    if not ta: return None, None
+    lat, lng = ta["trackStart"]["pos"]["lat"], ta["trackStart"]["pos"]["lng"]
+    t = 0; pts = [(0, [lat/1e6, lng/1e6])]
+    for dl, dg, dt in zip(ta["trackPoints"]["lats"], ta["trackPoints"]["lngs"], ta["trackPoints"]["timestamps"]):
+        lat += dl; lng += dg; t += dt
+        pts.append((t, [lat/1e6, lng/1e6]))
+    end_t, end_p = pts[-1]
+    heading = None
+    for tt, pp in reversed(pts):
+        if hav(pp, end_p) >= 0.1: heading = round(bearing(pp, end_p)); break
+    speed = 0.0
+    for tt, pp in reversed(pts):
+        if end_t - tt >= 600 or (tt, pp) == pts[0]:
+            if end_t > tt: speed = hav(pp, end_p) / ((end_t - tt) / 3600)
+            break
+    return heading, round(speed, 1)
+
+def parse_times(times):
+    """'Th, 06:00:00' / '06:20:32' / '-' -> absolutsekunder (dag räknas upp vid dagsprefix eller när klockan går bakåt)."""
+    out, day, prev = [], -1, None
+    for t in times:
+        raw = (t.get("time") or "").strip()
+        m = re.match(r"(?:([A-Za-z]{2}),\s*)?(\d{1,2}):(\d{2}):(\d{2})", raw)
+        if not m: out.append(None); continue
+        sec = int(m.group(2))*3600 + int(m.group(3))*60 + int(m.group(4))
+        if m.group(1) or prev is None or sec < prev: day += 1
+        prev = sec
+        out.append(day*86400 + sec)
+    return out
+
 def team_detail(args):
     rid, track_id, race_id, app_id, outdir = args
     rt = ajax(action="get_racer_times", id=rid, track_id=track_id, utc_replay_time=0)
@@ -78,14 +116,14 @@ def team_detail(args):
               additional_racer_id=rid, from_datetime="2026-01-01 00:00:00")
     if not rt: return False
     racer = {k: rt["racer"].get(k) for k in RACER_KEYS}
-    track = []
+    track, heading, speed = [], None, None
     if up:
         me = next((p for p in up["positions"] if str(p["id"]) == str(rid)), None)
-        track = decode_track(me.get("track_addition") if me else None, None)
+        ta = me.get("track_addition") if me else None
+        track = decode_track(ta, None)
+        heading, speed = motion(ta)
     times = [{"name": t["name"], "time": t.get("time") or ""} for t in rt["times"]]
-    json.dump({"racer": racer, "times": times, "track": track},
-              open(os.path.join(outdir, "teams", f"{rid}.json"), "w"), separators=(",", ":"), ensure_ascii=False)
-    return True
+    return {"id": rid, "racer": racer, "times": times, "track": track, "heading": heading, "speed": speed}
 
 def main(out):
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
@@ -125,15 +163,38 @@ def main(out):
             "lat": pos[0], "lng": pos[1], "km": round(km, 2), "off": round(off, 2), "seen": seen,
             "lost": bool(r.get("lost_signal")), "status": int(r.get("status_id") or 0), "finish": r.get("finish_time") or ""})
     teams.sort(key=lambda t: -t["km"])
-    json.dump({"race": td["raceData"]["name"], "generated": datetime.now(paris).isoformat(timespec="seconds"),
+    doc = {"race": td["raceData"]["name"], "generated": datetime.now(paris).isoformat(timespec="seconds"),
         "server_time_utc": live["server_time_utc"], "total_km": round(cum[-1], 2),
-        "course": [[round(a, 5), round(b, 5)] for a, b in course], "checkpoints": cps, "teams": teams},
-        open(out, "w"), separators=(",", ":"), ensure_ascii=False)
+        "course": [[round(a, 5), round(b, 5)] for a, b in course], "checkpoints": cps}
+    json.dump(doc | {"teams": teams}, open(out, "w"), separators=(",", ":"), ensure_ascii=False)
     outdir = os.path.dirname(os.path.abspath(out))
     os.makedirs(os.path.join(outdir, "teams"), exist_ok=True)
     with ThreadPoolExecutor(4) as ex:
-        ok = sum(ex.map(team_detail, [(t["id"], 0, td["raceId"], td["appId"], outdir) for t in teams]))
-    print(f"{ok}/{len(teams)} lagdetaljer")
+        details = [d for d in ex.map(team_detail, [(t["id"], 0, td["raceId"], td["appId"], outdir) for t in teams]) if d]
+    # delsträckor: tid sedan senast passerade checkpoint; snabbaste per exakt sträcka markeras
+    best = {}
+    for d in details:
+        ab = parse_times(d["times"]); prev_i = None
+        for i, a in enumerate(ab):
+            d["times"][i]["split"] = None; d["times"][i]["leg"] = None
+            if a is None: continue
+            if prev_i is not None and a > ab[prev_i]:
+                sp = a - ab[prev_i]; key = f"{prev_i}-{i}"
+                d["times"][i]["split"] = sp; d["times"][i]["leg"] = key
+                if key not in best or sp < best[key]: best[key] = sp
+            prev_i = i
+    for d in details:
+        for t in d["times"]:
+            t["best"] = bool(t["leg"] and best.get(t["leg"]) == t["split"]); t.pop("leg", None)
+        json.dump({"racer": d["racer"], "times": d["times"], "track": d["track"]},
+                  open(os.path.join(outdir, "teams", f"{d['id']}.json"), "w"), separators=(",", ":"), ensure_ascii=False)
+    mo = {d["id"]: d for d in details}
+    for t in teams:
+        d = mo.get(t["id"])
+        t["heading"] = d["heading"] if d else None
+        t["spd"] = d["speed"] if d else None
+    json.dump(doc | {"teams": teams}, open(out, "w"), separators=(",", ":"), ensure_ascii=False)
+    print(f"{len(details)}/{len(teams)} lagdetaljer, {len(best)} sträckor")
     print(f"{len(teams)} lag, {len(course)} bananpunkter, {len(cps)} checkpoints, {cum[-1]:.1f} km")
 
 if __name__ == "__main__":

@@ -63,6 +63,27 @@ header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:1
 .cards .card.tap.open::after{transform:rotate(90deg)}
 .cards .card.tap .hint{color:var(--accent);font-size:12px;font-weight:600;margin-top:2px}
 .cards .card.tap:active{background:var(--line)}
+.mw{position:relative;width:40px;height:40px}
+.mw .ar{position:absolute;inset:0}
+.mw .ar i{position:absolute;left:50%;top:-2px;margin-left:-7px;border:7px solid transparent;border-bottom:11px solid #fff;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
+.mw .mk{position:absolute;left:6px;top:6px}
+.mw .sd{position:absolute;right:1px;bottom:1px;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #0a1a24}
+.fab{position:fixed;right:12px;top:calc(env(safe-area-inset-top) + 58px);z-index:1000;display:flex;flex-direction:column;gap:8px}
+.fab button{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:19px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.fab button.on{background:var(--accent);color:#1a1200}
+#mlabel{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 108px);z-index:1000;background:var(--accent);color:#1a1200;font-weight:700;padding:8px 14px;border-radius:12px;display:none;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.4);white-space:nowrap}
+#toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 62px);z-index:3000;background:#b3261e;color:#fff;padding:8px 14px;border-radius:10px;font-size:14px;display:none;max-width:90vw}
+#loading{position:fixed;inset:0;z-index:4000;background:var(--bg,#0b1a24);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .4s}
+#loading.hide{opacity:0;pointer-events:none}
+#loading .sp{width:44px;height:44px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loading small{color:var(--mute)}
+.leaflet-top.leaflet-left{top:calc(env(safe-area-inset-top) + 56px)}
+.times li{align-items:flex-start}
+.times li span:first-child{flex:1}
+.times li .t{text-align:right}
+.times li .t em{display:block;font-style:normal;font-size:12px;color:var(--mute);font-weight:400}
+.times li .t em.best{color:var(--accent);font-weight:700}
 .times{margin:0 0 12px;padding:0;list-style:none;font-variant-numeric:tabular-nums}
 .times li{display:flex;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:14px}
 .times li.done span:last-child{color:var(--text);font-weight:600}
@@ -72,7 +93,11 @@ header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:1
 </style>
 </head>
 <body>
+<div id="loading"><div class="sp"></div><div id="lstat">Connecting to race server…</div><small>First load can take a moment</small></div>
+<div id="toast"></div>
+<div id="mlabel"></div>
 <div id="map"></div>
+<div class="fab"><button id="measure" title="Measure distance" aria-label="Measure distance">📏</button></div>
 <header>
   <div class="pill live"><span class="dot"></span><span id="clock">LIVE</span></div>
   <div class="pill" id="next" style="margin-left:8px;color:var(--mute)">Next –</div>
@@ -116,7 +141,7 @@ async function fetchTeams(){
     const seen=t.seen?new Date(t.seen).getTime():gen,p=prev[t.id];let speed=p?p.speed:0;
     if(p&&seen>p.seen){speed=Math.max(0,(t.km-p.km)/((seen-p.seen)/3600000))}
     prev[t.id]={km:t.km,seen,speed};
-    return{id:t.id,name:t.name,no:t.no,flag:t.flag,lat:t.lat,lng:t.lng,km:t.km,rank:t.rank,speed,lastSeen:seen,
+    return{id:t.id,name:t.name,no:t.no,flag:t.flag,lat:t.lat,lng:t.lng,km:t.km,rank:t.rank,speed:t.spd!=null?t.spd:speed,heading:t.heading,lastSeen:seen,
       cpPassed:CHECKPOINTS.filter(c=>c.km<=t.km).length,
       status:t.finish?'Finished':t.lost?'Signal lost':'On course'}});
 }
@@ -124,6 +149,7 @@ async function fetchTeams(){
 /* ===== KARTA ===== */
 const map=L.map('map',{zoomControl:false,attributionControl:false}).setView([42.45,8.95],9);
 L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:15}).addTo(map);
+L.control.scale({position:'topleft',metric:true,imperial:false,maxWidth:110}).addTo(map);
 L.control.attribution({prefix:false}).addTo(map).addAttribution('© OpenStreetMap, OpenTopoMap');
 let route;const FIT={paddingTopLeft:[10,60],paddingBottomRight:[10,170]};
 function initCourse(){
@@ -135,6 +161,8 @@ document.getElementById('fit').onclick=()=>{closeDetail();if(route)map.fitBounds
 
 /* ===== UI ===== */
 const sheet=document.getElementById('sheet'),listEl=document.getElementById('list'),q=document.getElementById('q');
+const SPEED_STOPS=[[0,[255,90,77]],[3,[255,178,56]],[8,[90,196,246]]];
+function speedColor(v){v=Math.max(0,Math.min(v||0,8));for(let i=0;i<2;i++){const[a,ca]=SPEED_STOPS[i],[b,cb]=SPEED_STOPS[i+1];if(v<=b){const k=(v-a)/(b-a);return`rgb(${ca.map((c,j)=>Math.round(c+(cb[j]-c)*k)).join(',')})`}}return'rgb(90,196,246)'}
 let teams=[],markers={},selected=null,sortBy='rank',favOnly=false;
 let favs=new Set();
 try{favs=new Set(JSON.parse(localStorage.getItem('favs')||'[]'));favOnly=localStorage.getItem('favOnly')==='1'}catch(e){}
@@ -160,9 +188,11 @@ function render(){
 function upsertMarkers(){
   ranked().forEach(t=>{
     if(!shown(t)&&t.id!==selected){if(markers[t.id]){map.removeLayer(markers[t.id]);delete markers[t.id]}return}
-    const html=`<div class="mk${selected===t.id?' sel':''}">${t.rank}</div>`;
-    if(!markers[t.id]){markers[t.id]=L.marker([t.lat,t.lng],{icon:L.divIcon({className:'',html,iconSize:[28,28]})}).addTo(map).on('click',()=>select(t.id))}
-    else{markers[t.id].setLatLng([t.lat,t.lng]);markers[t.id].setIcon(L.divIcon({className:'',html,iconSize:[28,28]}))}
+    const html=`<div class="mw"><div class="ar" style="display:${t.heading==null?'none':'block'};transform:rotate(${t.heading||0}deg)"><i></i></div><div class="mk${selected===t.id?' sel':''}">${t.rank}</div><span class="sd" style="background:${speedColor(t.speed)}"></span></div>`;
+    const ic=L.divIcon({className:'',html,iconSize:[40,40]});
+    if(!markers[t.id]){markers[t.id]=L.marker([t.lat,t.lng],{icon:ic}).addTo(map).on('click',()=>{if(!measuring)select(t.id)})}
+    else{markers[t.id].setLatLng([t.lat,t.lng]);markers[t.id].setIcon(ic)}
+    markers[t.id].setOpacity(selected&&selected!==t.id?.3:1);
   });
 }
 const detailCache={},trackLayers={};let cpOpen=false;
@@ -176,9 +206,11 @@ async function drawTracks(){
   for(const [id,color] of want){
     const d=await loadDetail(id);if(!d||!d.track.length||!(id===selected||favOnly&&favs.has(id)))continue;
     if(trackLayers[id])trackLayers[id].setLatLngs(d.track).setStyle({color});
-    else trackLayers[id]=L.polyline(d.track,{color,weight:3,opacity:.9}).addTo(map);
+    else trackLayers[id]=L.polyline(d.track,{color,weight:id===selected?4:3,opacity:id===selected||!selected?.9:.25}).addTo(map);
+    trackLayers[id].setStyle({weight:id===selected?4:3,opacity:id===selected||!selected?.9:.25});
   }
 }
+const fmtDur=s=>{const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${String(m).padStart(2,'0')}m`:`${m}m ${String(s%60).padStart(2,'0')}s`};
 const esc=x=>String(x??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function select(id,refresh){
   const changed=selected!==id;selected=id;const t=ranked().find(x=>x.id===id);if(!t)return;
@@ -203,7 +235,7 @@ function select(id,refresh){
     <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · open in Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
     ${r?st('Pace',r.pace)+st('VAM',r.vam)+st('Altitude',r.altitude)+st('Moving time',r.moving_time)+st('Standing time',r.standing_time)+st('Category',r.category_name):''}
    </div>
-   ${cpOpen?`<ul class="times">${times.map(c=>{const ok=c.time&&c.time!=='-';return`<li class="${ok?'done':''}"><span>${esc(c.name)}</span><span>${ok?esc(c.time):'–'}</span></li>`}).join('')||'<li><span>Loading…</span></li>'}</ul>`:''}
+   ${cpOpen?`<ul class="times">${times.map(c=>{const ok=c.time&&c.time!=='-';return`<li class="${ok?'done':''}"><span>${esc(c.name)}</span><span class="t">${ok?esc(c.time):'–'}${c.split?`<em class="${c.best?'best':''}">${c.best?'⚡ ':''}+${fmtDur(c.split)}</em>`:''}</span></li>`}).join('')||'<li><span>Loading…</span></li>'}</ul>`:''}
    <div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
   document.getElementById('bk').onclick=closeDetail;
   d.querySelector('[data-fav]').onclick=()=>toggleFav(t.id);
@@ -258,6 +290,26 @@ async function startMe(){
 }
 document.getElementById('loc').onclick=startMe;
 
+/* ===== Measure distance ===== */
+let measuring=false,mPts=[],mLine=null,mDots=[];
+const mLabel=document.getElementById('mlabel'),mBtn=document.getElementById('measure');
+function mDist(){let d=0;for(let i=1;i<mPts.length;i++)d+=map.distance(mPts[i-1],mPts[i]);return d/1000}
+function mRender(){
+  if(mLine)map.removeLayer(mLine);mDots.forEach(m=>map.removeLayer(m));mDots=[];
+  mLine=L.polyline(mPts,{color:'#fff',weight:3,dashArray:'6 6'}).addTo(map);
+  mDots=mPts.map(p=>L.circleMarker(p,{radius:5,color:'#1a1200',weight:2,fillColor:'#ffb400',fillOpacity:1,interactive:false}).addTo(map));
+  mLabel.textContent=mPts.length<2?'Tap the map to add points':`${mDist().toFixed(2)} km · tap here to undo`;
+}
+function mStop(){measuring=false;mPts=[];if(mLine)map.removeLayer(mLine);mLine=null;mDots.forEach(m=>map.removeLayer(m));mDots=[];mLabel.style.display='none';mBtn.classList.remove('on')}
+mBtn.onclick=()=>{if(measuring){mStop();return}measuring=true;mBtn.classList.add('on');mLabel.style.display='block';mRender()};
+mLabel.onclick=()=>{mPts.pop();mRender()};
+map.on('click',e=>{if(!measuring)return;mPts.push([e.latlng.lat,e.latlng.lng]);mRender()});
+
+/* ===== Toast + loader ===== */
+const toastEl=document.getElementById('toast');let toastT;
+function toast(msg){toastEl.textContent=msg;toastEl.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>toastEl.style.display='none',6000)}
+function hideLoader(){document.getElementById('loading').classList.add('hide')}
+
 /* ===== Countdown to next data update ===== */
 const nextEl=document.getElementById('next');
 setInterval(()=>{
@@ -271,8 +323,8 @@ setInterval(()=>{
 async function tick(){
   try{teams=await fetchTeams();upsertMarkers();if(!dragging&&!q.matches(':focus')&&document.getElementById('main').style.display!=='none')render();
     document.getElementById('clock').textContent='LIVE '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-    if(selected)select(selected,true)}
-  catch(e){document.getElementById('clock').textContent='Offline'}
+    if(selected)select(selected,true);hideLoader()}
+  catch(e){document.getElementById('clock').textContent='Offline';toast('Could not refresh data – retrying');document.getElementById('lstat').textContent='Still trying to reach the race data…'}
 }
 tick();setInterval(tick,60000);
 </script>
