@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1d2a">
+<title>ARWC Live</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#0b1d2a;--panel:#10283a;--panel2:#173650;--text:#eaf3f9;--mute:#8fa9bb;--accent:#ffb300;--ok:#3ddc97;--line:#23465f}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+#map{position:fixed;inset:0}
+header{position:fixed;top:0;left:0;right:0;z-index:1000;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px;display:flex;gap:8px;align-items:center;background:linear-gradient(var(--bg),rgba(11,29,42,.0))}
+.pill{background:rgba(16,40,58,.92);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-weight:600;backdrop-filter:blur(8px)}
+.live{display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:p 1.6s infinite}
+@keyframes p{50%{opacity:.25}}
+.grow{flex:1}
+#sheet{position:fixed;left:0;right:0;bottom:0;z-index:1001;background:var(--panel);border-radius:18px 18px 0 0;border-top:1px solid var(--line);box-shadow:0 -8px 30px rgba(0,0,0,.4);height:78vh;transform:translateY(calc(78vh - 150px));transition:transform .25s ease;display:flex;flex-direction:column;touch-action:none}
+#sheet.open{transform:translateY(0)}
+#sheet.dragging{transition:none}
+.grab{padding:8px 0 4px;display:flex;justify-content:center;cursor:grab}
+.grab i{width:42px;height:5px;border-radius:3px;background:var(--line)}
+.sbar{padding:4px 12px 10px}
+input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:11px 12px;font-size:16px;outline:none}
+.tabs{display:flex;gap:6px;padding:0 12px 8px}
+.tab{flex:1;text-align:center;padding:7px;border-radius:10px;background:var(--panel2);color:var(--mute);font-weight:600;border:0;font-size:14px}
+.tab.on{background:var(--accent);color:#1a1200}
+#list{overflow-y:auto;flex:1;padding:0 8px calc(env(safe-area-inset-bottom) + 16px);touch-action:pan-y;-webkit-overflow-scrolling:touch}
+.row{display:flex;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid var(--line)}
+.rank{min-width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-weight:800;background:var(--panel2)}
+.row:nth-child(-n+3) .rank{background:var(--accent);color:#1a1200}
+.info{flex:1;min-width:0}
+.name{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{color:var(--mute);font-size:13px}
+.bar{height:5px;background:var(--panel2);border-radius:3px;margin-top:6px;overflow:hidden}
+.bar b{display:block;height:100%;background:var(--ok)}
+.right{text-align:right;font-variant-numeric:tabular-nums}
+.right .km{font-weight:700}
+.flag{font-size:20px}
+#detail{display:none;padding:4px 14px 16px;overflow-y:auto}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.card{background:var(--panel2);border-radius:12px;padding:10px 12px}
+.card small{color:var(--mute);display:block}
+.card strong{font-size:20px}
+.back{background:none;border:0;color:var(--accent);font-size:15px;font-weight:600;padding:6px 0}
+.mk{width:28px;height:28px;border-radius:50%;background:var(--accent);color:#1a1200;font-weight:800;font-size:12px;display:grid;place-items:center;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5)}
+.mk.sel{background:#ff4d6d;color:#fff;transform:scale(1.25)}
+.cp{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid #1b6ca8}
+.leaflet-control-zoom{display:none}
+.demo{position:fixed;top:calc(env(safe-area-inset-top) + 52px);left:12px;z-index:1000;font-size:12px;color:#1a1200;background:var(--accent);padding:3px 8px;border-radius:6px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<header>
+  <div class="pill live"><span class="dot"></span><span id="clock">LIVE</span></div>
+  <div class="grow"></div>
+  <button class="pill" id="fit" style="color:var(--text)">Hela banan</button>
+</header>
+<div class="demo" id="demoBadge">DEMO-DATA</div>
+
+<section id="sheet">
+  <div class="grab" id="grab"><i></i></div>
+  <div id="main" style="display:flex;flex-direction:column;min-height:0;flex:1">
+    <div class="sbar"><input id="q" type="search" placeholder="Sök lag eller nation…" autocomplete="off"></div>
+    <div class="tabs">
+      <button class="tab on" data-s="rank">Ställning</button>
+      <button class="tab" data-s="speed">Fart</button>
+      <button class="tab" data-s="seen">Senast sedd</button>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div id="detail"></div>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ===== DATA-LAGER =====
+   Byt ut fetchTeams() mot riktiga API:t när det är känt.
+   Förväntat format per lag:
+   {id, name, country, flag, lat, lng, km, speed (km/h), lastSeen (ms), cpPassed, status}
+   Banan: COURSE = [[lat,lng],...], CHECKPOINTS = [{name,lat,lng}] */
+const COURSE = [[42.306,9.150],[42.370,9.060],[42.330,8.940],[42.285,8.905],[42.255,8.800],[42.263,8.700],[42.330,8.640],[42.410,8.650],[42.470,8.760],[42.510,8.860],[42.580,8.900],[42.635,8.935]];
+const CHECKPOINTS = [
+  {name:"Start – Corte",i:0},{name:"Calacuccia",i:2},{name:"Col de Vergio",i:3},{name:"Porto",i:5},
+  {name:"Galéria",i:7},{name:"Calenzana",i:8},{name:"Mål – L'Île-Rousse",i:11}
+];
+function segLens(){const L=[0];for(let i=1;i<COURSE.length;i++)L.push(L[i-1]+hav(COURSE[i-1],COURSE[i]));return L}
+function hav(a,b){const R=6371,r=Math.PI/180,dLa=(b[0]-a[0])*r,dLo=(b[1]-a[1])*r;const x=Math.sin(dLa/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
+const CUM=segLens(), TOTAL=CUM[CUM.length-1];
+function pointAt(km){km=Math.max(0,Math.min(TOTAL,km));let i=1;while(i<CUM.length-1&&CUM[i]<km)i++;const t=(km-CUM[i-1])/(CUM[i]-CUM[i-1]||1);const a=COURSE[i-1],b=COURSE[i];return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]}
+
+const NAMES=[["Seagate Salomon","🇳🇿"],["Thule Adventure","🇸🇪"],["Vidaris","🇨🇿"],["Haglöfs Silva","🇸🇪"],["Raidlight","🇫🇷"],["Team Bend","🇺🇸"],["Prime Time","🇳🇴"],["Naturex","🇪🇸"],["Orion","🇨🇿"],["Tiger Adventure","🇦🇺"],["Cyclone","🇬🇧"],["Fusion","🇩🇪"],["Nordic Wild","🇫🇮"],["Wedali","🇨🇭"],["Bergfex","🇦🇹"],["Alpine Wolves","🇮🇹"],["Kiwi Mix","🇳🇿"],["Iberia","🇵🇹"],["Dolomiti","🇮🇹"],["Aventura","🇧🇷"]];
+const SIM=NAMES.map(([n,f],i)=>({id:i+1,name:n,flag:f,country:f,km:TOTAL*(0.78-i*0.025)+Math.random()*3,v:5+Math.random()*4}));
+let lastTick=Date.now();
+async function fetchTeams(){
+  const now=Date.now(),dt=(now-lastTick)/3600000*600; // 600x tidsförkortning i demot
+  lastTick=now;
+  SIM.forEach(t=>{t.v=Math.max(2,Math.min(11,t.v+(Math.random()-.5)*.8));t.km=Math.min(TOTAL,t.km+t.v*dt)});
+  return SIM.map(t=>{const [lat,lng]=pointAt(t.km);
+    return{id:t.id,name:t.name,flag:t.flag,lat,lng,km:t.km,speed:t.v,lastSeen:now-Math.random()*40000,
+      cpPassed:CHECKPOINTS.filter(c=>CUM[c.i]<=t.km).length,status:t.km>=TOTAL?"Fixat":"På banan"}});
+}
+
+/* ===== KARTA ===== */
+const map=L.map('map',{zoomControl:false,attributionControl:false}).setView([42.45,8.95],9);
+L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:15}).addTo(map);
+L.control.attribution({prefix:false}).addTo(map).addAttribution('© OpenStreetMap, OpenTopoMap');
+const route=L.polyline(COURSE,{color:'#1b6ca8',weight:5,opacity:.85}).addTo(map);
+CHECKPOINTS.forEach(c=>L.marker(COURSE[c.i],{icon:L.divIcon({className:'',html:'<div class="cp"></div>',iconSize:[12,12]})}).addTo(map).bindTooltip(c.name,{direction:'top'}));
+map.fitBounds(route.getBounds(),{paddingTopLeft:[10,60],paddingBottomRight:[10,170]});
+document.getElementById('fit').onclick=()=>{closeDetail();map.fitBounds(route.getBounds(),{paddingTopLeft:[10,60],paddingBottomRight:[10,170]})};
+
+/* ===== UI ===== */
+const sheet=document.getElementById('sheet'),listEl=document.getElementById('list'),q=document.getElementById('q');
+let teams=[],markers={},selected=null,sortBy='rank';
+const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s sedan':Math.round(s/60)+' min sedan'};
+function ranked(){return [...teams].sort((a,b)=>b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
+function render(){
+  let r=ranked();const s=q.value.trim().toLowerCase();
+  if(s)r=r.filter(t=>t.name.toLowerCase().includes(s));
+  if(sortBy==='speed')r.sort((a,b)=>b.speed-a.speed);
+  if(sortBy==='seen')r.sort((a,b)=>b.lastSeen-a.lastSeen);
+  listEl.innerHTML=r.map(t=>`<div class="row" data-id="${t.id}">
+    <div class="rank">${t.rank}</div>
+    <div class="info"><div class="name"><span class="flag">${t.flag}</span> ${t.name}</div>
+      <div class="sub">CP ${t.cpPassed}/${CHECKPOINTS.length} · ${t.speed.toFixed(1)} km/h</div>
+      <div class="bar"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div></div>
+    <div class="right"><div class="km">${(TOTAL-t.km).toFixed(0)} km</div><div class="sub">kvar</div></div></div>`).join('')||'<p class="sub" style="padding:16px">Inga lag hittades.</p>';
+}
+function upsertMarkers(){
+  ranked().forEach(t=>{
+    const html=`<div class="mk${selected===t.id?' sel':''}">${t.rank}</div>`;
+    if(!markers[t.id]){markers[t.id]=L.marker([t.lat,t.lng],{icon:L.divIcon({className:'',html,iconSize:[28,28]})}).addTo(map).on('click',()=>select(t.id))}
+    else{markers[t.id].setLatLng([t.lat,t.lng]);markers[t.id].setIcon(L.divIcon({className:'',html,iconSize:[28,28]}))}
+  });
+}
+function select(id,refresh){
+  selected=id;const t=ranked().find(x=>x.id===id);if(!t)return;
+  if(!refresh){map.flyTo([t.lat,t.lng],12,{duration:.6});setSheet(false)}
+  document.getElementById('main').style.display='none';
+  const d=document.getElementById('detail');d.style.display='block';
+  d.innerHTML=`<button class="back" id="bk">← Alla lag</button>
+   <h2 style="margin:4px 0">${t.flag} ${t.name}</h2><div class="sub">${t.status} · ${fmtAgo(t.lastSeen)}</div>
+   <div class="grid">
+    <div class="card"><small>Placering</small><strong>#${t.rank}</strong></div>
+    <div class="card"><small>Fart</small><strong>${t.speed.toFixed(1)} km/h</strong></div>
+    <div class="card"><small>Avklarat</small><strong>${t.km.toFixed(0)} km</strong></div>
+    <div class="card"><small>Kvar</small><strong>${(TOTAL-t.km).toFixed(0)} km</strong></div>
+    <div class="card"><small>Checkpoints</small><strong>${t.cpPassed}/${CHECKPOINTS.length}</strong></div>
+    <div class="card"><small>Position</small><strong style="font-size:14px">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></div>
+   </div><div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
+  document.getElementById('bk').onclick=closeDetail;
+  upsertMarkers();
+}
+function closeDetail(){selected=null;document.getElementById('detail').style.display='none';document.getElementById('main').style.display='flex';upsertMarkers()}
+listEl.onclick=e=>{const r=e.target.closest('.row');if(r)select(+r.dataset.id)};
+q.oninput=render;
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');sortBy=b.dataset.s;render()});
+
+/* ===== Dragbart bottenpanel ===== */
+const PEEK=150;let startY=0,startOff=0,dragging=false;
+const maxOff=()=>sheet.offsetHeight-PEEK;
+function setSheet(open){sheet.style.transform='';sheet.classList.toggle('open',open)}
+const grab=document.getElementById('grab');
+grab.addEventListener('touchstart',e=>{dragging=true;startY=e.touches[0].clientY;startOff=sheet.classList.contains('open')?0:maxOff();sheet.classList.add('dragging')},{passive:true});
+grab.addEventListener('touchmove',e=>{if(!dragging)return;const off=Math.max(0,Math.min(maxOff(),startOff+e.touches[0].clientY-startY));sheet.style.transform=`translateY(${off}px)`},{passive:true});
+grab.addEventListener('touchend',e=>{dragging=false;sheet.classList.remove('dragging');const m=new DOMMatrix(getComputedStyle(sheet).transform).m42;setSheet(m<maxOff()/2)});
+grab.onclick=()=>setSheet(!sheet.classList.contains('open'));
+q.addEventListener('focus',()=>setSheet(true));
+
+/* ===== Loop ===== */
+async function tick(){
+  try{teams=await fetchTeams();upsertMarkers();if(!dragging&&!q.matches(':focus')&&document.getElementById('main').style.display!=='none')render();
+    document.getElementById('clock').textContent='LIVE '+new Date().toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+    if(selected)select(selected,true)}
+  catch(e){document.getElementById('clock').textContent='Offline'}
+}
+tick();setInterval(tick,5000);
+</script>
+</body>
+</html>
