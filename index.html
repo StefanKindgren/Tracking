@@ -88,7 +88,7 @@ header .pill{white-space:nowrap;font-size:13px;padding-left:10px;padding-right:1
 .times li{display:flex;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:14px}
 .times li.done span:last-child{color:var(--text);font-weight:600}
 .times li span:last-child{color:var(--mute)}
-.photo{width:100%;border-radius:12px;margin:8px 0;display:block}
+
 .demo{position:fixed;top:calc(env(safe-area-inset-top) + 52px);left:12px;z-index:1000;font-size:12px;color:#1a1200;background:var(--accent);padding:3px 8px;border-radius:6px;font-weight:700}
 </style>
 </head>
@@ -225,7 +225,6 @@ function select(id,refresh){
   d.innerHTML=`<button class="back" id="bk">← All teams</button>
    <h2 style="margin:4px 0;display:flex;align-items:center;gap:6px"><span style="flex:1">${t.flag} ${esc(t.name)} <small style="color:var(--mute)">#${esc(t.no)}</small></span><button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></h2>
    <div class="sub">${t.status} · last seen ${fmtAgo(t.lastSeen)}${r&&r.battery_level?' · 🔋 '+esc(r.battery_level):''}</div>
-   ${r&&r.photo?`<img class="photo" src="${esc(r.photo)}" alt="" loading="lazy" onerror="this.remove()">`:''}
    <div class="grid cards">
     <div class="card"><small>Rank</small><strong>#${t.rank}</strong></div>
     <div class="card"><small>Speed</small><strong>${r&&r.speed?esc(r.speed):t.speed.toFixed(1)+' km/h'}</strong></div>
