@@ -410,12 +410,14 @@ setInterval(()=>{
 
 /* ===== Loop ===== */
 async function tick(){
+  if(document.hidden)return; // no polling from background tabs
   try{teams=await fetchTeams();upsertMarkers();if(!dragging&&!q.matches(':focus')&&document.getElementById('main').style.display!=='none')render();
     document.getElementById('clock').textContent='LIVE '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
     if(selected)select(selected,true);else if(pinView)showPin();updateMeLine();hideLoader()}
   catch(e){document.getElementById('clock').textContent='Offline';toast('Could not refresh data – retrying');document.getElementById('lstat').textContent='Still trying to reach the race data…'}
 }
 tick();setInterval(tick,30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script>
 </body>
 </html>
