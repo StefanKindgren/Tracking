@@ -59,7 +59,6 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
   <div class="grow"></div>
   <button class="pill" id="fit" style="color:var(--text)">Hela banan</button>
 </header>
-<div class="demo" id="demoBadge">DEMO-DATA</div>
 
 <section id="sheet">
   <div class="grab" id="grab"><i></i></div>
@@ -78,46 +77,39 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 /* ===== DATA-LAGER =====
-   Byt ut fetchTeams() mot riktiga API:t när det är känt.
-   Förväntat format per lag:
-   {id, name, country, flag, lat, lng, km, speed (km/h), lastSeen (ms), cpPassed, status}
-   Banan: COURSE = [[lat,lng],...], CHECKPOINTS = [{name,lat,lng}] */
-const COURSE = [[42.306,9.150],[42.370,9.060],[42.330,8.940],[42.285,8.905],[42.255,8.800],[42.263,8.700],[42.330,8.640],[42.410,8.650],[42.470,8.760],[42.510,8.860],[42.580,8.900],[42.635,8.935]];
-const CHECKPOINTS = [
-  {name:"Start – Corte",i:0},{name:"Calacuccia",i:2},{name:"Col de Vergio",i:3},{name:"Porto",i:5},
-  {name:"Galéria",i:7},{name:"Calenzana",i:8},{name:"Mål – L'Île-Rousse",i:11}
-];
-function segLens(){const L=[0];for(let i=1;i<COURSE.length;i++)L.push(L[i-1]+hav(COURSE[i-1],COURSE[i]));return L}
-function hav(a,b){const R=6371,r=Math.PI/180,dLa=(b[0]-a[0])*r,dLo=(b[1]-a[1])*r;const x=Math.sin(dLa/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
-const CUM=segLens(), TOTAL=CUM[CUM.length-1];
-function pointAt(km){km=Math.max(0,Math.min(TOTAL,km));let i=1;while(i<CUM.length-1&&CUM[i]<km)i++;const t=(km-CUM[i-1])/(CUM[i]-CUM[i-1]||1);const a=COURSE[i-1],b=COURSE[i];return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]}
-
-const NAMES=[["Seagate Salomon","🇳🇿"],["Thule Adventure","🇸🇪"],["Vidaris","🇨🇿"],["Haglöfs Silva","🇸🇪"],["Raidlight","🇫🇷"],["Team Bend","🇺🇸"],["Prime Time","🇳🇴"],["Naturex","🇪🇸"],["Orion","🇨🇿"],["Tiger Adventure","🇦🇺"],["Cyclone","🇬🇧"],["Fusion","🇩🇪"],["Nordic Wild","🇫🇮"],["Wedali","🇨🇭"],["Bergfex","🇦🇹"],["Alpine Wolves","🇮🇹"],["Kiwi Mix","🇳🇿"],["Iberia","🇵🇹"],["Dolomiti","🇮🇹"],["Aventura","🇧🇷"]];
-const SIM=NAMES.map(([n,f],i)=>({id:i+1,name:n,flag:f,country:f,km:TOTAL*(0.78-i*0.025)+Math.random()*3,v:5+Math.random()*4}));
-let lastTick=Date.now();
+   data.json skapas av tools/fetch_data.py (ARWC2026 på follow.me.cz) och uppdateras av GitHub Actions. */
+let COURSE=[],CHECKPOINTS=[],TOTAL=0,prev={};
 async function fetchTeams(){
-  const now=Date.now(),dt=(now-lastTick)/3600000*600; // 600x tidsförkortning i demot
-  lastTick=now;
-  SIM.forEach(t=>{t.v=Math.max(2,Math.min(11,t.v+(Math.random()-.5)*.8));t.km=Math.min(TOTAL,t.km+t.v*dt)});
-  return SIM.map(t=>{const [lat,lng]=pointAt(t.km);
-    return{id:t.id,name:t.name,flag:t.flag,lat,lng,km:t.km,speed:t.v,lastSeen:now-Math.random()*40000,
-      cpPassed:CHECKPOINTS.filter(c=>CUM[c.i]<=t.km).length,status:t.km>=TOTAL?"Fixat":"På banan"}});
+  const j=await (await fetch('data.json?'+Date.now(),{cache:'no-store'})).json();
+  if(!COURSE.length){COURSE=j.course;CHECKPOINTS=j.checkpoints;TOTAL=j.total_km;initCourse()}
+  document.title=j.race+' – live';
+  const gen=new Date(j.generated).getTime();
+  return j.teams.map(t=>{
+    const seen=t.seen?new Date(t.seen).getTime():gen,p=prev[t.id];let speed=p?p.speed:0;
+    if(p&&seen>p.seen){speed=Math.max(0,(t.km-p.km)/((seen-p.seen)/3600000))}
+    prev[t.id]={km:t.km,seen,speed};
+    return{id:t.id,name:t.name,no:t.no,flag:t.flag,lat:t.lat,lng:t.lng,km:t.km,rank:t.rank,speed,lastSeen:seen,
+      cpPassed:CHECKPOINTS.filter(c=>c.km<=t.km).length,
+      status:t.finish?'Fixat':t.lost?'Tappad signal':'På banan'}});
 }
 
 /* ===== KARTA ===== */
 const map=L.map('map',{zoomControl:false,attributionControl:false}).setView([42.45,8.95],9);
 L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:15}).addTo(map);
 L.control.attribution({prefix:false}).addTo(map).addAttribution('© OpenStreetMap, OpenTopoMap');
-const route=L.polyline(COURSE,{color:'#1b6ca8',weight:5,opacity:.85}).addTo(map);
-CHECKPOINTS.forEach(c=>L.marker(COURSE[c.i],{icon:L.divIcon({className:'',html:'<div class="cp"></div>',iconSize:[12,12]})}).addTo(map).bindTooltip(c.name,{direction:'top'}));
-map.fitBounds(route.getBounds(),{paddingTopLeft:[10,60],paddingBottomRight:[10,170]});
-document.getElementById('fit').onclick=()=>{closeDetail();map.fitBounds(route.getBounds(),{paddingTopLeft:[10,60],paddingBottomRight:[10,170]})};
+let route;const FIT={paddingTopLeft:[10,60],paddingBottomRight:[10,170]};
+function initCourse(){
+  route=L.polyline(COURSE,{color:'#1b6ca8',weight:5,opacity:.85}).addTo(map);
+  CHECKPOINTS.forEach(c=>L.marker([c.lat,c.lng],{icon:L.divIcon({className:'',html:'<div class="cp"></div>',iconSize:[12,12]})}).addTo(map).bindTooltip(c.name,{direction:'top'}));
+  map.fitBounds(route.getBounds(),FIT);
+}
+document.getElementById('fit').onclick=()=>{closeDetail();if(route)map.fitBounds(route.getBounds(),FIT)};
 
 /* ===== UI ===== */
 const sheet=document.getElementById('sheet'),listEl=document.getElementById('list'),q=document.getElementById('q');
 let teams=[],markers={},selected=null,sortBy='rank';
 const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s sedan':Math.round(s/60)+' min sedan'};
-function ranked(){return [...teams].sort((a,b)=>b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
+function ranked(){return [...teams].sort((a,b)=>(a.rank||999)-(b.rank||999)||b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
 function render(){
   let r=ranked();const s=q.value.trim().toLowerCase();
   if(s)r=r.filter(t=>t.name.toLowerCase().includes(s));
@@ -178,7 +170,7 @@ async function tick(){
     if(selected)select(selected,true)}
   catch(e){document.getElementById('clock').textContent='Offline'}
 }
-tick();setInterval(tick,5000);
+tick();setInterval(tick,60000);
 </script>
 </body>
 </html>
