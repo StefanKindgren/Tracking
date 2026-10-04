@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="sv">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -63,11 +63,11 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <section id="sheet">
   <div class="grab" id="grab"><i></i></div>
   <div id="main" style="display:flex;flex-direction:column;min-height:0;flex:1">
-    <div class="sbar"><input id="q" type="search" placeholder="Sök lag eller nation…" autocomplete="off"></div>
+    <div class="sbar"><input id="q" type="search" placeholder="Search team or nation…" autocomplete="off"></div>
     <div class="tabs">
-      <button class="tab on" data-s="rank">Ställning</button>
-      <button class="tab" data-s="speed">Fart</button>
-      <button class="tab" data-s="seen">Senast sedd</button>
+      <button class="tab on" data-s="rank">Standings</button>
+      <button class="tab" data-s="speed">Speed</button>
+      <button class="tab" data-s="seen">Last seen</button>
     </div>
     <div id="list"></div>
   </div>
@@ -77,7 +77,7 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 /* ===== DATA-LAGER =====
-   data.json skapas av tools/fetch_data.py (ARWC2026 på follow.me.cz) och uppdateras av GitHub Actions. */
+   data.json is created by tools/fetch_data.py (ARWC2026 from follow.me.cz) and refreshed by GitHub Actions. */
 let COURSE=[],CHECKPOINTS=[],TOTAL=0,prev={};
 async function fetchTeams(){
   const j=await (await fetch('data.json?'+Date.now(),{cache:'no-store'})).json();
@@ -90,7 +90,7 @@ async function fetchTeams(){
     prev[t.id]={km:t.km,seen,speed};
     return{id:t.id,name:t.name,no:t.no,flag:t.flag,lat:t.lat,lng:t.lng,km:t.km,rank:t.rank,speed,lastSeen:seen,
       cpPassed:CHECKPOINTS.filter(c=>c.km<=t.km).length,
-      status:t.finish?'Fixat':t.lost?'Tappad signal':'På banan'}});
+      status:t.finish?'Finished':t.lost?'Signal lost':'On course'}});
 }
 
 /* ===== KARTA ===== */
@@ -108,7 +108,7 @@ document.getElementById('fit').onclick=()=>{closeDetail();if(route)map.fitBounds
 /* ===== UI ===== */
 const sheet=document.getElementById('sheet'),listEl=document.getElementById('list'),q=document.getElementById('q');
 let teams=[],markers={},selected=null,sortBy='rank';
-const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s sedan':Math.round(s/60)+' min sedan'};
+const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s ago':Math.round(s/60)+' min ago'};
 function ranked(){return [...teams].sort((a,b)=>(a.rank||999)-(b.rank||999)||b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
 function render(){
   let r=ranked();const s=q.value.trim().toLowerCase();
@@ -120,7 +120,7 @@ function render(){
     <div class="info"><div class="name"><span class="flag">${t.flag}</span> ${t.name}</div>
       <div class="sub">CP ${t.cpPassed}/${CHECKPOINTS.length} · ${t.speed.toFixed(1)} km/h</div>
       <div class="bar"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div></div>
-    <div class="right"><div class="km">${(TOTAL-t.km).toFixed(0)} km</div><div class="sub">kvar</div></div></div>`).join('')||'<p class="sub" style="padding:16px">Inga lag hittades.</p>';
+    <div class="right"><div class="km">${(TOTAL-t.km).toFixed(0)} km</div><div class="sub">to go</div></div></div>`).join('')||'<p class="sub" style="padding:16px">No teams found.</p>';
 }
 function upsertMarkers(){
   ranked().forEach(t=>{
@@ -134,15 +134,15 @@ function select(id,refresh){
   if(!refresh){map.flyTo([t.lat,t.lng],12,{duration:.6});setSheet(false)}
   document.getElementById('main').style.display='none';
   const d=document.getElementById('detail');d.style.display='block';
-  d.innerHTML=`<button class="back" id="bk">← Alla lag</button>
+  d.innerHTML=`<button class="back" id="bk">← All teams</button>
    <h2 style="margin:4px 0">${t.flag} ${t.name}</h2><div class="sub">${t.status} · ${fmtAgo(t.lastSeen)}</div>
    <div class="grid">
-    <div class="card"><small>Placering</small><strong>#${t.rank}</strong></div>
-    <div class="card"><small>Fart</small><strong>${t.speed.toFixed(1)} km/h</strong></div>
-    <div class="card"><small>Avklarat</small><strong>${t.km.toFixed(0)} km</strong></div>
-    <div class="card"><small>Kvar</small><strong>${(TOTAL-t.km).toFixed(0)} km</strong></div>
+    <div class="card"><small>Rank</small><strong>#${t.rank}</strong></div>
+    <div class="card"><small>Speed</small><strong>${t.speed.toFixed(1)} km/h</strong></div>
+    <div class="card"><small>Covered</small><strong>${t.km.toFixed(0)} km</strong></div>
+    <div class="card"><small>Remaining</small><strong>${(TOTAL-t.km).toFixed(0)} km</strong></div>
     <div class="card"><small>Checkpoints</small><strong>${t.cpPassed}/${CHECKPOINTS.length}</strong></div>
-    <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · öppna i Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
+    <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · open in Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
    </div><div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
   document.getElementById('bk').onclick=closeDetail;
   upsertMarkers();
@@ -166,7 +166,7 @@ q.addEventListener('focus',()=>setSheet(true));
 /* ===== Loop ===== */
 async function tick(){
   try{teams=await fetchTeams();upsertMarkers();if(!dragging&&!q.matches(':focus')&&document.getElementById('main').style.display!=='none')render();
-    document.getElementById('clock').textContent='LIVE '+new Date().toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+    document.getElementById('clock').textContent='LIVE '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
     if(selected)select(selected,true)}
   catch(e){document.getElementById('clock').textContent='Offline'}
 }
