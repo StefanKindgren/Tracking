@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Hämtar ARWC2026 från follow.me.cz och skriver data.json (bana, checkpoints, lag)."""
-import json, math, re, sys, urllib.parse, urllib.request
+import json, math, os, re, sys, time, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,46 @@ def project(course, cum, p):
         if d < best[0]: best = (d, cum[i-1] + (cum[i]-cum[i-1])*t)
     return best[1], best[0]
 
+AJAX = BASE + "/wp-admin/admin-ajax.php"
+RACER_KEYS = ["name","race_number","category_name","rank","photo","battery_level","battery_time","altitude","pace","speed","vam",
+              "moving_time","standing_time","status","status_position","latitude","longitude"]
+
+def ajax(**params):
+    for attempt in range(3):
+        try:
+            return json.loads(get(AJAX + "?" + urllib.parse.urlencode(params)))["results"]
+        except Exception:
+            time.sleep(1 + attempt)
+    return None
+
+def decode_track(ta, tz):
+    """track_addition = startpunkt (µ-grader) + deltor; returnerar [[lat,lng],..] glesad till ~30 m."""
+    if not ta: return []
+    lat, lng = ta["trackStart"]["pos"]["lat"], ta["trackStart"]["pos"]["lng"]
+    pts = [[lat / 1e6, lng / 1e6]]
+    for dl, dg in zip(ta["trackPoints"]["lats"], ta["trackPoints"]["lngs"]):
+        lat += dl; lng += dg
+        p = [lat / 1e6, lng / 1e6]
+        if hav(pts[-1], p) >= 0.03: pts.append(p)
+    if pts[-1] != [lat / 1e6, lng / 1e6]: pts.append([lat / 1e6, lng / 1e6])
+    return [[round(a, 5), round(b, 5)] for a, b in pts]
+
+def team_detail(args):
+    rid, track_id, race_id, app_id, outdir = args
+    rt = ajax(action="get_racer_times", id=rid, track_id=track_id, utc_replay_time=0)
+    up = ajax(action="get_update", race_id=race_id, app_id=app_id, track_id=track_id, racer_id=rid,
+              additional_racer_id=rid, from_datetime="2026-01-01 00:00:00")
+    if not rt: return False
+    racer = {k: rt["racer"].get(k) for k in RACER_KEYS}
+    track = []
+    if up:
+        me = next((p for p in up["positions"] if str(p["id"]) == str(rid)), None)
+        track = decode_track(me.get("track_addition") if me else None, None)
+    times = [{"name": t["name"], "time": t.get("time") or ""} for t in rt["times"]]
+    json.dump({"racer": racer, "times": times, "track": track},
+              open(os.path.join(outdir, "teams", f"{rid}.json"), "w"), separators=(",", ":"), ensure_ascii=False)
+    return True
+
 def main(out):
     html = get(PAGE)
     m = re.search(r"var track_data = (\{.*?\n\t\t\});", html, re.S)
@@ -87,6 +128,11 @@ def main(out):
         "server_time_utc": live["server_time_utc"], "total_km": round(cum[-1], 2),
         "course": [[round(a, 5), round(b, 5)] for a, b in course], "checkpoints": cps, "teams": teams},
         open(out, "w"), separators=(",", ":"), ensure_ascii=False)
+    outdir = os.path.dirname(os.path.abspath(out))
+    os.makedirs(os.path.join(outdir, "teams"), exist_ok=True)
+    with ThreadPoolExecutor(4) as ex:
+        ok = sum(ex.map(team_detail, [(t["id"], 0, td["raceId"], td["appId"], outdir) for t in teams]))
+    print(f"{ok}/{len(teams)} lagdetaljer")
     print(f"{len(teams)} lag, {len(course)} bananpunkter, {len(cps)} checkpoints, {cum[-1]:.1f} km")
 
 if __name__ == "__main__":

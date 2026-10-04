@@ -52,6 +52,16 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 .mk.sel{background:#ff4d6d;color:#fff;transform:scale(1.25)}
 .cp{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid #1b6ca8}
 .leaflet-control-zoom{display:none}
+.me{width:22px;height:22px;position:relative}
+.me i{position:absolute;inset:3px;border-radius:50%;background:#2f7bff;border:3px solid #fff;box-shadow:0 0 0 6px rgba(47,123,255,.25),0 2px 6px rgba(0,0,0,.5)}
+.me b{position:absolute;left:50%;top:-14px;margin-left:-7px;border:7px solid transparent;border-bottom:12px solid #2f7bff;display:none;transform-origin:7px 25px}
+.me.dir b{display:block}
+.cards .card{cursor:pointer}
+.times{margin:0 0 12px;padding:0;list-style:none;font-variant-numeric:tabular-nums}
+.times li{display:flex;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:14px}
+.times li.done span:last-child{color:var(--text);font-weight:600}
+.times li span:last-child{color:var(--mute)}
+.photo{width:100%;border-radius:12px;margin:8px 0;display:block}
 .demo{position:fixed;top:calc(env(safe-area-inset-top) + 52px);left:12px;z-index:1000;font-size:12px;color:#1a1200;background:var(--accent);padding:3px 8px;border-radius:6px;font-weight:700}
 </style>
 </head>
@@ -60,6 +70,7 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 <header>
   <div class="pill live"><span class="dot"></span><span id="clock">LIVE</span></div>
   <div class="grow"></div>
+  <button class="pill" id="loc" style="color:var(--text);margin-right:8px">◎ Me</button>
   <button class="pill" id="fit" style="color:var(--text)">Full course</button>
 </header>
 
@@ -83,8 +94,13 @@ input{width:100%;background:var(--panel2);border:1px solid var(--line);border-ra
 /* ===== DATA-LAGER =====
    data.json is created by tools/fetch_data.py (ARWC2026 from follow.me.cz) and refreshed by GitHub Actions. */
 let COURSE=[],CHECKPOINTS=[],TOTAL=0,prev={};
+const REMOTE='https://raw.githubusercontent.com/StefanKindgren/Tracking/data/';
+async function getJSON(path){
+  for(const base of [REMOTE,'']){try{const r=await fetch(base+path+'?'+Math.floor(Date.now()/60000),{cache:'no-store'});if(r.ok)return await r.json()}catch(e){}}
+  throw new Error('no data');
+}
 async function fetchTeams(){
-  const j=await (await fetch('data.json?'+Date.now(),{cache:'no-store'})).json();
+  const j=await getJSON('data.json');
   if(!COURSE.length){COURSE=j.course;CHECKPOINTS=j.checkpoints;TOTAL=j.total_km;initCourse()}
   document.title=j.race+' – live';
   const gen=new Date(j.generated).getTime();
@@ -117,7 +133,7 @@ try{favs=new Set(JSON.parse(localStorage.getItem('favs')||'[]'));favOnly=localSt
 const saveFavs=()=>{try{localStorage.setItem('favs',JSON.stringify([...favs]));localStorage.setItem('favOnly',favOnly?'1':'0')}catch(e){}};
 const shown=t=>!favOnly||favs.has(t.id);
 function syncFav(){const b=document.getElementById('favOnly');b.classList.toggle('on',favOnly);document.getElementById('favN').textContent=favs.size}
-function toggleFav(id){favs.has(id)?favs.delete(id):favs.add(id);if(!favs.size)favOnly=false;saveFavs();syncFav();upsertMarkers();render();if(selected)select(selected,true)}
+function toggleFav(id){favs.has(id)?favs.delete(id):favs.add(id);if(!favs.size)favOnly=false;saveFavs();syncFav();upsertMarkers();render();drawTracks();if(selected)select(selected,true)}
 const fmtAgo=ms=>{const s=Math.round((Date.now()-ms)/1000);return s<60?s+' s ago':Math.round(s/60)+' min ago'};
 function ranked(){return [...teams].sort((a,b)=>(a.rank||999)-(b.rank||999)||b.km-a.km).map((t,i)=>({...t,rank:i+1}))}
 function render(){
@@ -141,29 +157,58 @@ function upsertMarkers(){
     else{markers[t.id].setLatLng([t.lat,t.lng]);markers[t.id].setIcon(L.divIcon({className:'',html,iconSize:[28,28]}))}
   });
 }
+const detailCache={},trackLayers={};let cpOpen=false;
+async function loadDetail(id){
+  if(detailCache[id]&&Date.now()-detailCache[id].at<120000)return detailCache[id];
+  try{const d=await getJSON('teams/'+id+'.json');d.at=Date.now();detailCache[id]=d;return d}catch(e){return detailCache[id]||null}
+}
+async function drawTracks(){
+  const want=new Map();if(selected)want.set(selected,'#ff4d6d');if(favOnly)favs.forEach(id=>{if(!want.has(id))want.set(id,'#ffb400')});
+  Object.keys(trackLayers).forEach(id=>{if(!want.has(+id)){map.removeLayer(trackLayers[id]);delete trackLayers[id]}});
+  for(const [id,color] of want){
+    const d=await loadDetail(id);if(!d||!d.track.length||!(id===selected||favOnly&&favs.has(id)))continue;
+    if(trackLayers[id])trackLayers[id].setLatLngs(d.track).setStyle({color});
+    else trackLayers[id]=L.polyline(d.track,{color,weight:3,opacity:.9}).addTo(map);
+  }
+}
+const esc=x=>String(x??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function select(id,refresh){
-  selected=id;const t=ranked().find(x=>x.id===id);if(!t)return;
+  const changed=selected!==id;selected=id;const t=ranked().find(x=>x.id===id);if(!t)return;
+  if(changed)cpOpen=false;
   if(!refresh){map.flyTo([t.lat,t.lng],12,{duration:.6});setSheet(false)}
   document.getElementById('main').style.display='none';
   const d=document.getElementById('detail');d.style.display='block';
+  const x=detailCache[id],r=x&&x.racer,times=x?x.times:[];
+  const done=times.filter(c=>c.time&&c.time!=='-').length;
+  const cpTxt=x?`${done}/${times.length}`:`${t.cpPassed}/${CHECKPOINTS.length}`;
+  const st=(k,v)=>v?`<div class="card"><small>${k}</small><strong style="font-size:17px">${esc(v)}</strong></div>`:'';
   d.innerHTML=`<button class="back" id="bk">← All teams</button>
-   <h2 style="margin:4px 0;display:flex;align-items:center;gap:6px"><span style="flex:1">${t.flag} ${t.name}</span><button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></h2><div class="sub">${t.status} · ${fmtAgo(t.lastSeen)}</div>
-   <div class="grid">
+   <h2 style="margin:4px 0;display:flex;align-items:center;gap:6px"><span style="flex:1">${t.flag} ${esc(t.name)} <small style="color:var(--mute)">#${esc(t.no)}</small></span><button class="star${favs.has(t.id)?' on':''}" data-fav="${t.id}" aria-label="Favourite">${favs.has(t.id)?'★':'☆'}</button></h2>
+   <div class="sub">${t.status} · last seen ${fmtAgo(t.lastSeen)}${r&&r.battery_level?' · 🔋 '+esc(r.battery_level):''}</div>
+   ${r&&r.photo?`<img class="photo" src="${esc(r.photo)}" alt="" loading="lazy" onerror="this.remove()">`:''}
+   <div class="grid cards">
     <div class="card"><small>Rank</small><strong>#${t.rank}</strong></div>
-    <div class="card"><small>Speed</small><strong>${t.speed.toFixed(1)} km/h</strong></div>
+    <div class="card"><small>Speed</small><strong>${r&&r.speed?esc(r.speed):t.speed.toFixed(1)+' km/h'}</strong></div>
     <div class="card"><small>Covered</small><strong>${t.km.toFixed(0)} km</strong></div>
     <div class="card"><small>Remaining</small><strong>${(TOTAL-t.km).toFixed(0)} km</strong></div>
-    <div class="card"><small>Checkpoints</small><strong>${t.cpPassed}/${CHECKPOINTS.length}</strong></div>
+    <div class="card" id="cpCard"><small>Checkpoints ${cpOpen?'▴':'▾'}</small><strong>${cpTxt}</strong></div>
     <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · open in Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
-   </div><div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
-  document.getElementById('bk').onclick=closeDetail;d.querySelector('[data-fav]').onclick=()=>toggleFav(t.id);
+    ${r?st('Pace',r.pace)+st('VAM',r.vam)+st('Altitude',r.altitude)+st('Moving time',r.moving_time)+st('Standing time',r.standing_time)+st('Category',r.category_name):''}
+   </div>
+   ${cpOpen?`<ul class="times">${times.map(c=>{const ok=c.time&&c.time!=='-';return`<li class="${ok?'done':''}"><span>${esc(c.name)}</span><span>${ok?esc(c.time):'–'}</span></li>`}).join('')||'<li><span>Loading…</span></li>'}</ul>`:''}
+   <div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
+  document.getElementById('bk').onclick=closeDetail;
+  d.querySelector('[data-fav]').onclick=()=>toggleFav(t.id);
+  document.getElementById('cpCard').onclick=()=>{cpOpen=!cpOpen;select(id,true)};
   upsertMarkers();
+  if(!x||Date.now()-x.at>=120000)loadDetail(id).then(()=>{if(selected===id)select(id,true)});
+  drawTracks();
 }
-function closeDetail(){selected=null;document.getElementById('detail').style.display='none';document.getElementById('main').style.display='flex';upsertMarkers()}
+function closeDetail(){selected=null;drawTracks();document.getElementById('detail').style.display='none';document.getElementById('main').style.display='flex';upsertMarkers()}
 listEl.onclick=e=>{const f=e.target.closest('[data-fav]');if(f){toggleFav(+f.dataset.fav);return}const r=e.target.closest('.row');if(r)select(+r.dataset.id)};
 document.getElementById('favOnly').onclick=()=>{
   if(!favs.size&&!favOnly){alert('Tap ☆ on a team to add it to your favourites first.');return}
-  favOnly=!favOnly;saveFavs();syncFav();upsertMarkers();render();
+  favOnly=!favOnly;saveFavs();syncFav();upsertMarkers();render();drawTracks();
   if(favOnly&&route){const pts=teams.filter(t=>favs.has(t.id)).map(t=>[t.lat,t.lng]);if(pts.length)map.fitBounds(pts,{...FIT,maxZoom:12})}
 };
 syncFav();
@@ -180,6 +225,30 @@ grab.addEventListener('touchmove',e=>{if(!dragging)return;const off=Math.max(0,M
 grab.addEventListener('touchend',e=>{dragging=false;sheet.classList.remove('dragging');const m=new DOMMatrix(getComputedStyle(sheet).transform).m42;setSheet(m<maxOff()/2)});
 grab.onclick=()=>setSheet(!sheet.classList.contains('open'));
 q.addEventListener('focus',()=>setSheet(true));
+
+/* ===== My position + heading ===== */
+let meMarker=null,meHeading=null,meOn=false,lastFix=null;
+function meIcon(){return L.divIcon({className:'',html:`<div class="me${meHeading!=null?' dir':''}"><b style="transform:rotate(${meHeading||0}deg)"></b><i></i></div>`,iconSize:[22,22]})}
+function setHeading(h){if(h==null||isNaN(h))return;meHeading=(h+360)%360;if(meMarker)meMarker.setIcon(meIcon())}
+function onFix(p){
+  const ll=[p.coords.latitude,p.coords.longitude];lastFix=ll;
+  if(!meMarker){meMarker=L.marker(ll,{icon:meIcon(),zIndexOffset:1000,interactive:false}).addTo(map);if(meOn)map.flyTo(ll,Math.max(map.getZoom(),12),{duration:.6});meOn=false}
+  else meMarker.setLatLng(ll);
+  if(p.coords.heading!=null&&!isNaN(p.coords.heading)&&(p.coords.speed||0)>0.5)setHeading(p.coords.heading);
+}
+function onOrient(e){
+  const h=e.webkitCompassHeading!=null?e.webkitCompassHeading:(e.absolute&&e.alpha!=null?360-e.alpha:null);
+  setHeading(h);
+}
+async function startMe(){
+  if(!navigator.geolocation){alert('Location is not available in this browser.');return}
+  meOn=true;
+  if(lastFix){map.flyTo(lastFix,Math.max(map.getZoom(),12),{duration:.6});return}
+  try{if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission){if(await DeviceOrientationEvent.requestPermission()==='granted')addEventListener('deviceorientation',onOrient,true)}
+      else{addEventListener('deviceorientationabsolute',onOrient,true);addEventListener('deviceorientation',onOrient,true)}}catch(e){}
+  navigator.geolocation.watchPosition(onFix,err=>{alert('Could not get your position: '+err.message)},{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
+}
+document.getElementById('loc').onclick=startMe;
 
 /* ===== Loop ===== */
 async function tick(){
