@@ -142,7 +142,7 @@ function select(id,refresh){
     <div class="card"><small>Avklarat</small><strong>${t.km.toFixed(0)} km</strong></div>
     <div class="card"><small>Kvar</small><strong>${(TOTAL-t.km).toFixed(0)} km</strong></div>
     <div class="card"><small>Checkpoints</small><strong>${t.cpPassed}/${CHECKPOINTS.length}</strong></div>
-    <div class="card"><small>Position</small><strong style="font-size:14px">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></div>
+    <a class="card" href="https://www.google.com/maps/search/?api=1&query=${t.lat},${t.lng}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><small>Position · öppna i Google Maps ↗</small><strong style="font-size:14px;text-decoration:underline">${t.lat.toFixed(4)}, ${t.lng.toFixed(4)}</strong></a>
    </div><div class="bar" style="height:8px"><b style="width:${(t.km/TOTAL*100).toFixed(1)}%"></b></div>`;
   document.getElementById('bk').onclick=closeDetail;
   upsertMarkers();
