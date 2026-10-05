@@ -11,11 +11,26 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-      - run: python3 tools/fetch_data.py out/data.json
+      - name: Reuse previous team files (kept if a fetch fails)
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: prev
+        continue-on-error: true
+      - run: |
+          mkdir -p out
+          [ -d prev/teams ] && cp -r prev/teams out/teams || true
+          rm -rf prev
+      - name: Fetch data
+        timeout-minutes: 9
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python3 tools/fetch_data.py out/data.json
       - name: Publish to data branch (single commit, no history growth)
+        if: hashFiles('out/data.json') != ''
         working-directory: out
         run: |
           git init -q -b data

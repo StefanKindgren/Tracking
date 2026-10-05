@@ -51,15 +51,28 @@ AJAX = BASE + "/wp-admin/admin-ajax.php"
 RACER_KEYS = ["name","race_number","category_name","rank","photo","battery_level","battery_time","altitude","pace","speed","vam",
               "moving_time","standing_time","status","status_position","latitude","longitude"]
 
-def ajax(retries=4, delay=2, **params):
-    """admin-ajax-anrop med omförsök. Källan svarar ibland HTTP 400 eller {"success":false} slumpmässigt."""
+DEADLINE = time.time() + 6 * 60  # efter detta görs inga fler omförsök (jobbet ska aldrig hänga)
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+def ajax(retries=4, delay=1, **params):
+    """admin-ajax-anrop med omförsök. Källan svarar ibland HTTP 400 eller {"success":false} slumpmässigt (ca hälften av get_update-anropen)."""
+    why = "ok"
     for attempt in range(retries):
+        if attempt and time.time() > DEADLINE:
+            why = "deadline"; break
         try:
             j = json.loads(get(AJAX + "?" + urllib.parse.urlencode(params)))
             if j.get("success") and j.get("results"): return j["results"]
-        except Exception:
-            pass
-        time.sleep(delay * (attempt + 1))
+            why = "success=false"
+        except Exception as e:
+            why = type(e).__name__ + " " + str(e)[:60]
+        if params.get("action") == "get_update":
+            log(f"get_update försök {attempt + 1}/{retries} misslyckades: {why}")
+        time.sleep(delay)
+    if params.get("action") != "get_update":
+        log(f"{params.get('action')} id={params.get('id')} gav upp: {why}")
     return None
 
 TRACKS = {}  # racer-id -> track_addition (fylls av main från ett enda get_update-anrop)
@@ -127,6 +140,7 @@ def team_detail(args):
 
 def main(out):
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    log("hämtar sidan")
     html = get(PAGE)
     m = re.search(r"var track_data = (\{.*?\n\t\t\});", html, re.S)
     td = json.loads(m.group(1))
@@ -148,7 +162,9 @@ def main(out):
     live = ajax(retries=8, delay=3, action="get_update", race_id=td["raceId"], app_id=td["appId"], track_id=0, racer_id=0,
                 from_datetime=start_utc.strftime("%Y-%m-%d %H:%M:%S"))
     if not live:
-        raise SystemExit("get_update misslyckades efter omförsök – behåller senast publicerade data")
+        print("::warning::get_update misslyckades efter omförsök – behåller senast publicerade data", flush=True)
+        sys.exit(0)  # ingen data.json skrivs => workflowet hoppar över publiceringen
+    log(f"get_update ok: {len(live['positions'])} lag")
     TRACKS.update({str(p["id"]): p.get("track_addition") for p in live["positions"]})
     now = datetime.now(paris)
     teams = []
