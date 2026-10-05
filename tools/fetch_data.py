@@ -51,13 +51,18 @@ AJAX = BASE + "/wp-admin/admin-ajax.php"
 RACER_KEYS = ["name","race_number","category_name","rank","photo","battery_level","battery_time","altitude","pace","speed","vam",
               "moving_time","standing_time","status","status_position","latitude","longitude"]
 
-def ajax(**params):
-    for attempt in range(3):
+def ajax(retries=4, delay=2, **params):
+    """admin-ajax-anrop med omförsök. Källan svarar ibland HTTP 400 eller {"success":false} slumpmässigt."""
+    for attempt in range(retries):
         try:
-            return json.loads(get(AJAX + "?" + urllib.parse.urlencode(params)))["results"]
+            j = json.loads(get(AJAX + "?" + urllib.parse.urlencode(params)))
+            if j.get("success") and j.get("results"): return j["results"]
         except Exception:
-            time.sleep(1 + attempt)
+            pass
+        time.sleep(delay * (attempt + 1))
     return None
+
+TRACKS = {}  # racer-id -> track_addition (fylls av main från ett enda get_update-anrop)
 
 def decode_track(ta, tz):
     """track_addition = startpunkt (µ-grader) + deltor; returnerar [[lat,lng],..] glesad till ~30 m."""
@@ -111,17 +116,12 @@ def parse_times(times):
 
 def team_detail(args):
     rid, track_id, race_id, app_id, outdir = args
-    rt = ajax(action="get_racer_times", id=rid, track_id=track_id, utc_replay_time=0)
-    up = ajax(action="get_update", race_id=race_id, app_id=app_id, track_id=track_id, racer_id=rid,
-              additional_racer_id=rid, from_datetime="2026-01-01 00:00:00")
+    rt = ajax(action="get_racer_times", id=rid, track_id=track_id)
     if not rt: return False
     racer = {k: rt["racer"].get(k) for k in RACER_KEYS}
-    track, heading, speed = [], None, None
-    if up:
-        me = next((p for p in up["positions"] if str(p["id"]) == str(rid)), None)
-        ta = me.get("track_addition") if me else None
-        track = decode_track(ta, None)
-        heading, speed = motion(ta)
+    ta = TRACKS.get(str(rid))
+    track = decode_track(ta, None)
+    heading, speed = motion(ta)
     times = [{"name": t["name"], "time": t.get("time") or ""} for t in rt["times"]]
     return {"id": rid, "racer": racer, "times": times, "track": track, "heading": heading, "speed": speed}
 
@@ -142,9 +142,14 @@ def main(out):
         cps.append({"name": c["name"], "code": c["code"], "lat": p[0], "lng": p[1], "km": round(km, 2)})
     cps.sort(key=lambda c: c["km"])
 
-    q = urllib.parse.urlencode({"action":"get_update","race_id":td["raceId"],"app_id":td["appId"],"track_id":0,"racer_id":0,"from_datetime":""})
-    live = json.loads(get(BASE + "/wp-admin/admin-ajax.php?" + q))["results"]
     paris = ZoneInfo("Europe/Paris")
+    # Källan kräver from_datetime >= racestart (UTC). Racestart som from_datetime ger positioner + hela spåren för alla lag i ett anrop.
+    start_utc = datetime.fromisoformat(td["raceData"]["real_race_start"]).replace(tzinfo=paris).astimezone(ZoneInfo("UTC"))
+    live = ajax(retries=8, delay=3, action="get_update", race_id=td["raceId"], app_id=td["appId"], track_id=0, racer_id=0,
+                from_datetime=start_utc.strftime("%Y-%m-%d %H:%M:%S"))
+    if not live:
+        raise SystemExit("get_update misslyckades efter omförsök – behåller senast publicerade data")
+    TRACKS.update({str(p["id"]): p.get("track_addition") for p in live["positions"]})
     now = datetime.now(paris)
     teams = []
     for r in live["positions"]:
