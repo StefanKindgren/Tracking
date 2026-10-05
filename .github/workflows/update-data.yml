@@ -7,7 +7,7 @@ permissions:
   contents: write
 concurrency:
   group: update-data
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   update:
     runs-on: ubuntu-latest
