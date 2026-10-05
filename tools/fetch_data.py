@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hämtar ARWC2026 från follow.me.cz och skriver data.json (bana, checkpoints, lag)."""
-import json, math, os, re, sys, time, urllib.parse, urllib.request
+import json, math, os, re, sys, threading, time, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,8 +10,18 @@ PAGE = BASE + "/tracking-en/ARWC2026/"
 UA = {"User-Agent": "Mozilla/5.0 (tracking-demo)"}
 ISO3 = {"FRA":"FR","EST":"EE","SWE":"SE","NOR":"NO","FIN":"FI","DEN":"DK","DNK":"DK","GER":"DE","DEU":"DE","ESP":"ES","ITA":"IT","CZE":"CZ","SVK":"SK","POL":"PL","NED":"NL","NLD":"NL","BEL":"BE","SUI":"CH","CHE":"CH","AUT":"AT","GBR":"GB","GRB":"GB","USA":"US","CAN":"CA","AUS":"AU","NZL":"NZ","BRA":"BR","ARG":"AR","CHL":"CL","CHI":"CL","JPN":"JP","CHN":"CN","POR":"PT","PRT":"PT","HUN":"HU","LAT":"LV","LVA":"LV","LTU":"LT","LIT":"LT","RSA":"ZA","ZAF":"ZA","IRL":"IE","ISL":"IS","SLO":"SI","SVN":"SI","CRO":"HR","HRV":"HR","UKR":"UA","RUS":"RU","MEX":"MX","COL":"CO","ECU":"EC","PER":"PE"}
 
-def get(url):
-    return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30).read().decode()
+def get(url, total=45):
+    """GET med total tidsgräns (urllib:s timeout gäller bara per läsning, så en seg nedladdning kan annars dra ut i evighet)."""
+    t0 = time.time()
+    resp = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=20)
+    chunks = []
+    while True:
+        b = resp.read(65536)
+        if not b: break
+        chunks.append(b)
+        if time.time() - t0 > total:
+            raise TimeoutError(f"nedladdningen tog över {total}s ({sum(map(len, chunks))} byte)")
+    return b"".join(chunks).decode()
 
 def decode_poly(s):
     pts, i, lat, lng = [], 0, 0, 0
@@ -56,14 +66,14 @@ DEADLINE = time.time() + 6 * 60  # efter detta görs inga fler omförsök (jobbe
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-def ajax(retries=4, delay=1, **params):
+def ajax(retries=4, delay=1, total=20, **params):
     """admin-ajax-anrop med omförsök. Källan svarar ibland HTTP 400 eller {"success":false} slumpmässigt (ca hälften av get_update-anropen)."""
     why = "ok"
     for attempt in range(retries):
         if attempt and time.time() > DEADLINE:
             why = "deadline"; break
         try:
-            j = json.loads(get(AJAX + "?" + urllib.parse.urlencode(params)))
+            j = json.loads(get(AJAX + "?" + urllib.parse.urlencode(params), total=total))
             if j.get("success") and j.get("results"): return j["results"]
             why = "success=false"
         except Exception as e:
@@ -138,10 +148,16 @@ def team_detail(args):
     times = [{"name": t["name"], "time": t.get("time") or ""} for t in rt["times"]]
     return {"id": rid, "racer": racer, "times": times, "track": track, "heading": heading, "speed": speed}
 
+def watchdog():
+    log("VAKTHUND: tidsgränsen på 5 min nåddes – avslutar och behåller senast publicerade data")
+    os._exit(0)
+
 def main(out):
+    wd = threading.Timer(5 * 60, watchdog); wd.daemon = True; wd.start()
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     log("hämtar sidan")
-    html = get(PAGE)
+    html = get(PAGE, total=60)
+    log(f"sidan hämtad ({len(html) // 1024} kB)")
     m = re.search(r"var track_data = (\{.*?\n\t\t\});", html, re.S)
     td = json.loads(m.group(1))
     track = td["tracks"][0]
@@ -159,7 +175,7 @@ def main(out):
     paris = ZoneInfo("Europe/Paris")
     # Källan kräver from_datetime >= racestart (UTC). Racestart som from_datetime ger positioner + hela spåren för alla lag i ett anrop.
     start_utc = datetime.fromisoformat(td["raceData"]["real_race_start"]).replace(tzinfo=paris).astimezone(ZoneInfo("UTC"))
-    live = ajax(retries=8, delay=3, action="get_update", race_id=td["raceId"], app_id=td["appId"], track_id=0, racer_id=0,
+    live = ajax(retries=8, delay=2, total=100, action="get_update", race_id=td["raceId"], app_id=td["appId"], track_id=0, racer_id=0,
                 from_datetime=start_utc.strftime("%Y-%m-%d %H:%M:%S"))
     if not live:
         print("::warning::get_update misslyckades efter omförsök – behåller senast publicerade data", flush=True)
@@ -191,8 +207,12 @@ def main(out):
     json.dump(doc | {"teams": teams}, open(out, "w"), separators=(",", ":"), ensure_ascii=False)
     outdir = os.path.dirname(os.path.abspath(out))
     os.makedirs(os.path.join(outdir, "teams"), exist_ok=True)
+    log(f"hämtar lagdetaljer för {len(teams)} lag")
+    details = []
     with ThreadPoolExecutor(4) as ex:
-        details = [d for d in ex.map(team_detail, [(t["id"], 0, td["raceId"], td["appId"], outdir) for t in teams]) if d]
+        for i, d in enumerate(ex.map(team_detail, [(t["id"], 0, td["raceId"], td["appId"], outdir) for t in teams]), 1):
+            if d: details.append(d)
+            if i % 20 == 0: log(f"  {i}/{len(teams)} lag klara ({len(details)} ok)")
     # delsträckor: tid sedan senast passerade checkpoint; snabbaste per exakt sträcka markeras
     best = {}
     for d in details:
